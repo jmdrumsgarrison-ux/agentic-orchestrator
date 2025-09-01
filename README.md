@@ -9,23 +9,15 @@ app_file: app.py
 pinned: false
 ---
 
-# AO v0.3.1 — Docker (Opinionated)
+# AO v0.3.3 — Docker (Opinionated, no allowlist)
 
-What changed
-- **Repo URL optional**. Discovery order:
-  1) `AO_DEFAULT_REPO` env (full https URL)
-  2) Single item in `ALLOWLIST_REPOS` (owner/repo)
-  3) Last used repo cache (`/tmp/ao_last_repo.json`)
-- **Branch auto**: resolve remote default (`origin/HEAD`); fallback to `main`/`master`; create `main` for empty repos.
-- **Auto plan/log**: AO generates `ops/plan.md` & `ops/logbook.md` content with version, goals, guardrails.
-- **Auto-commit heuristic** (you don't decide):
-  - If changes are only under `ops/`, diff < 100KB, and plan length >= 50 chars → commit & push.
-  - Else → Dry Run with diff preview and a message asking for approval.
-- **Output links** to the pushed files on GitHub.
+Changes
+- **ALLOWLIST_REPOS removed** from the write path. AO uses **AO_DEFAULT_REPO** as the single source of truth.
+- UI simplified: **no repo textbox**. Click **Run** and AO writes to AO_DEFAULT_REPO.
+- Keeps prior hardening: HOME set, repo-local git identity, auto-branch, auto plan/log, auto-commit heuristic.
 
-Env / secrets
-- `GITHUB_TOKEN` (write)
-- `OPENAI_API_KEY` (optional)
-- `ALLOWLIST_REPOS` (optional CSV of owner/repo)
-- `AO_DEFAULT_REPO` (optional full https repo URL)
-- `AO_AUTO_COMMIT` (optional; default: true)
+Config
+- `GITHUB_TOKEN` (required, repo write perms)
+- `AO_DEFAULT_REPO` (required, full https URL to the AO server repo)
+- `AO_AUTO_COMMIT` (optional; default true)
+- `OPENAI_API_KEY` (optional, Ask tab)

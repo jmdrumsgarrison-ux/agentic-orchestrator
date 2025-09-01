@@ -12,6 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py ./
 COPY README.md ./
 
+ENV HOME=/tmp/ao_home
+RUN mkdir -p /tmp/ao_home
 ENV PYTHONUNBUFFERED=1
 EXPOSE 7860
 
