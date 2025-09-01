@@ -11,7 +11,7 @@ def status():
         "GITHUB_TOKEN_present": bool(GITHUB_TOKEN),
         "python": sys.version.split()[0],
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "build": "AO v0.1.1 (Docker)"
+        "build": "AO v0.1.2 (Docker Clean)"
     }
 
 def ask_chatgpt(question, context=""):
@@ -33,7 +33,6 @@ def ask_chatgpt(question, context=""):
             json=payload, timeout=60
         )
         if r.status_code == 429:
-            # clearer message
             try:
                 detail = r.json()
             except Exception:
@@ -45,11 +44,9 @@ def ask_chatgpt(question, context=""):
     except Exception as e:
         return f"[exception] {e}"
 
-# Writable path for HF Docker Spaces
-WORKDIR = "/data/repo_ro"
+WORKDIR = "/home/user/repo_ro"
 
 def git_read(repo_url):
-    # make sure base dir exists
     try:
         os.makedirs(WORKDIR, exist_ok=True)
     except Exception as e:
@@ -91,8 +88,8 @@ def git_read(repo_url):
         info["error"] = str(e)
         return json.dumps(info, indent=2)
 
-with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.1 — Docker") as demo:
-    gr.Markdown("## AO v0.1.1 — Docker\nGUI + ChatGPT + Read-only Git (writes to /data)")
+with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.2 — Docker Clean") as demo:
+    gr.Markdown("## AO v0.1.2 — Docker (Clean)\nGUI + ChatGPT + Read-only Git (writes to /home/user)")
 
     with gr.Tab("Status"):
         btn_stat = gr.Button("Check Status")

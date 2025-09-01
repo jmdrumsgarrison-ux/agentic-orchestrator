@@ -1,4 +1,4 @@
-﻿---
+---
 title: Agentic Orchestrator (AO)
 emoji: 🧠
 colorFrom: green
@@ -9,15 +9,11 @@ app_file: app.py
 pinned: false
 ---
 
-# AO v0.1.1 — Docker
+# AO v0.1.2 — Docker (Clean)
 
 Fixes:
-- **PermissionError** when cloning: use **/data** for writable storage (`/data/repo_ro`).
-- Clearer error messages in Git tab.
-- Friendlier message for OpenAI 429 (quota).
+- Git working directory is now **/home/user/repo_ro** (writable in HF Docker Spaces).
 
-Secrets:
-SecretStrippedByGitPush
-- `GITHUB_TOKEN` (optional, for private repos)
-
-
+Notes:
+- Ask ChatGPT still requires an API key with **Pay-As-You-Go** billing enabled on the OpenAI Platform.
+- Optional `GITHUB_TOKEN` for private repos.
