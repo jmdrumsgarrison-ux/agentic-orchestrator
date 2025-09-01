@@ -18,3 +18,16 @@ warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF 
 warning: in the working copy of 'setup.bat', LF will be replaced by CRLF the next time Git touches it
 Tagged: v0.0.1
 Applying Drop>=67: HF_Orchestrator_Drop68_Space.zip
+warning: in the working copy of 'Logs/run-RULES-REDACT-SAFE-Mon0901-202517.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/defaults.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/orchestrator.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68_Space/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68_Space/app/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68_Space/app/defaults.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68_Space/app/orchestrator.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68_Space/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+Tagged: v0.0.2
+Applying Drop>=67: HF_Orchestrator_Drop68.zip

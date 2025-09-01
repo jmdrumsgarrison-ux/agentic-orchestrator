@@ -20,39 +20,56 @@ def load_defaults():
         }
 
 def _ensure_module(modname, pip_name=None, extra_args=None, log=None):
+    """
+    Try to import a module; if missing, pip install and re-import.
+    Returns the imported module object.
+    """
     try:
         return importlib.import_module(modname)
     except ModuleNotFoundError as e:
-        if log: log(f"[auto-repair] Missing module '{modname}'. Installing...")
+        if log: log(f"[auto-repair] Missing module '{modname}'. Attempting self-install...")
         pkg = pip_name or modname
         cmd = [sys.executable, "-m", "pip", "install", pkg]
         if extra_args:
             cmd.extend(extra_args)
-        subprocess.check_call(cmd)
-        if log: log(f"[auto-repair] Installed '{pkg}'. Re-importing...")
-        return importlib.import_module(modname)
+        try:
+            subprocess.check_call(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+            if log: log(f"[auto-repair] Installed '{pkg}'. Re-importing...")
+            return importlib.import_module(modname)
+        except Exception as ie:
+            if log: log(f"[auto-repair] Failed to install '{pkg}': {ie}")
+            raise e
 
-def _logger(logs):
+def _default_logger_factory(logs):
     def _log(msg):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
-        logs.append(f"{ts}  {msg}")
+        line = f"{ts}  {msg}"
+        logs.append(line)
     return _log
 
 def orchestrate(namespace, space_name, repo_url, hardware=None, private=True, retry_limit=3, logs=None):
+    """
+    Demo orchestrate that exercises GitPython and shows auto-repair if it's missing.
+    """
     logs = logs if logs is not None else []
-    log = _logger(logs)
+    log = _default_logger_factory(logs)
 
-    log("Orchestrator starting (Drop68 Space).")
+    log("Orchestrator starting (Drop68 demo).")
     log(f"Inputs: namespace={namespace}, space={space_name}, repo={repo_url}, hardware={hardware or '(auto)'}, private={private}")
-    _ensure_module("git", pip_name="gitpython", log=log)
-    log("GitPython OK.")
-    # Real orchestrate logic would continue here...
+    log("Checking GitPython...")
+    git_mod = _ensure_module("git", pip_name="gitpython", log=log)
+
+    # Use the module lightly to verify it's present
+    log(f"GitPython version: {getattr(git_mod, '__version__', 'unknown')}")
+
+    # In the full app, we'd proceed with real logic; here just pretend success
+    log("Proceeding with repo operations (omitted in demo).")
     log("DONE")
     return "\n".join(logs)
 
 def manual_github_sync(logs=None):
     logs = logs if logs is not None else []
-    log = _logger(logs)
+    log = _default_logger_factory(logs)
     log("Manual GitHub sync (demo).")
     _ensure_module("git", pip_name="gitpython", log=log)
     log("Sync ok (demo).")
