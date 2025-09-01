@@ -1,16 +1,14 @@
 ---
 title: AgentiveOrchestrator
-emoji: 🧩
+emoji: 🚀
 colorFrom: blue
-colorTo: indigo
+colorTo: purple
 sdk: gradio
-sdk_version: "4.37.2"
+sdk_version: "4.44.1"
 app_file: app.py
 pinned: false
 ---
 
-This Space runs a minimal AO chat with:
-- GPT model via `OPENAI_MODEL` (default `gpt-5`).
-- Rich text editor (Quill) that converts to Markdown before sending.
-- File uploads.
-- Version banner.
+# AgentiveOrchestrator
+
+AO v0.8.4 — GPT-5 + uploads + banner + rich text.
