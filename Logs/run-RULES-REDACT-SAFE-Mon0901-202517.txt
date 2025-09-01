@@ -154,3 +154,16 @@ warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF 
 Updated tag 'v0.1.2' (was 7987462)
 Tagged: v0.1.2
 Applying explicit version: AO_v0.1.3_docker.zip -> v0.1.3
+warning: in the working copy of '.dockerignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Logs/run-RULES-REDACT-SAFE-Mon0901-202517.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/.dockerignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
+Tagged: v0.1.3
+Applying explicit version: AO_v0.2.0_docker.zip -> v0.2.0
