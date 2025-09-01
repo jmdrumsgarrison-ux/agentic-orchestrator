@@ -1,76 +1,65 @@
 
-import os
-import gradio as gr
+import os, gradio as gr
+from datetime import datetime
 
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
+APP_VERSION = "AO v0.8.7"
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
 
-APP_VERSION = "v0.8.6"
-MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-5").strip()
-OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+BANNER = f"### {APP_VERSION} — GPT model: `{MODEL}` • Rich text → Markdown • Uploads"
 
-BANNER = f"""
-<div style="padding:10px 12px;
-    background:linear-gradient(90deg,#4f46e5,#2563eb);
-    color:#fff;border-radius:10px;margin-bottom:10px;font-weight:600">
-  AO {APP_VERSION} — GPT-5 • Rich text • Uploads • Version banner
-</div>
-"""
+def echo_markdown(md_text, files):
+    reply = ["### Received Markdown", md_text or "(_empty_)"]
+    if files:
+        reply.append("### Files")
+        for f in files:
+            reply.append(f"- {os.path.basename(f)}")
+    return "\n".join(reply)
 
-def _make_client():
-    if not OPENAI_KEY or OpenAI is None:
-        return None
-    try:
-        return OpenAI()
-    except Exception:
-        return None
+with gr.Blocks(css="""
+#rt-wrap { border: 1px solid #CCD; border-radius: 8px; padding: 8px; }
+#rt-toolbar button { margin-right: 6px; padding: 4px 8px; }
+#rt-area { min-height: 160px; outline: none; padding: 8px; }
+""") as demo:
+    gr.Markdown(BANNER)
 
-def _dry_run_reply(text):
-    msg = text.strip() or "(empty message)"
-    return f"(dry-run) No OPENAI_API_KEY set. I received: “{msg}”."
-
-def send_fn(history, richtext, files):
-    user_text = (richtext or "").strip()
-    if not user_text:
-        return history, gr.update(value="")
-    new_messages = history + [{"role": "user", "content": user_text}]
-    client = _make_client()
-    if client is None:
-        assistant_text = _dry_run_reply(user_text)
-        new_messages.append({"role": "assistant", "content": assistant_text})
-        return new_messages, gr.update(value="")
-    try:
-        resp = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=new_messages,
-            temperature=0.3,
-        )
-        assistant = resp.choices[0].message.content or ""
-        new_messages.append({"role": "assistant", "content": assistant})
-    except Exception as e:
-        new_messages.append({"role": "assistant", "content": f"(error) {e}"})
-    return new_messages, gr.update(value="")
-
-with gr.Blocks(fill_height=True, theme=gr.themes.Soft()) as demo:
-    gr.HTML(BANNER)
     with gr.Row():
-        with gr.Column(scale=2):
-            chat = gr.Chatbot(label="AO Chat", type="messages", height=520)
         with gr.Column(scale=1):
-            gr.Markdown("**Rich text input**")
-            editor = gr.RichText(
-                placeholder="Write here… bullets, bold, links, etc.",
-                show_copy_button=True,
+            gr.Markdown("#### Rich text editor (HTML → Markdown)")
+            gr.HTML(
+                '''
+                <script src="https://cdn.jsdelivr.net/npm/turndown@7.1.2/dist/turndown.js"></script>
+                <div id="rt-wrap">
+                  <div id="rt-toolbar">
+                    <button onclick="document.execCommand('bold', false, null)"><b>B</b></button>
+                    <button onclick="document.execCommand('italic', false, null)"><i>I</i></button>
+                    <button onclick="document.execCommand('insertUnorderedList', false, null)">• List</button>
+                    <button onclick="document.execCommand('insertOrderedList', false, null)">1. List</button>
+                  </div>
+                  <div id="rt-area" contenteditable="true" spellcheck="true">
+                    Type here… (this is HTML under the hood, converted to Markdown).
+                  </div>
+                </div>
+                <script>
+                window.__getEditorMarkdown = function(){
+                  const area = document.getElementById('rt-area');
+                  const html = area ? area.innerHTML : "";
+                  const td = new TurndownService({headingStyle:"atx"});
+                  return td.turndown(html || "");
+                };
+                </script>
+                '''
             )
-            send = gr.Button("Send", variant="primary")
-            uploads = gr.File(file_count="multiple", label="Attach files")
-            gr.Markdown(
-                f"**Model:** `{MODEL_NAME}` | (Set OPENAI_MODEL / OPENAI_API_KEY)"
-            )
-    state = gr.State([])
-    send.click(send_fn, inputs=[state, editor, uploads], outputs=[chat, editor])        .then(lambda h: h, inputs=chat, outputs=state)
+            use_btn = gr.Button("Use editor content")
+            md_box = gr.Textbox(label="Markdown (from editor)", lines=8, placeholder="Press the button above to pull from editor")
+            use_btn.click(fn=None, inputs=None, outputs=md_box, js="() => window.__getEditorMarkdown()")
+
+            files = gr.Files(label="Upload files (optional)", type="filepath")
+            send = gr.Button("Send")
+            out = gr.Markdown()
+
+            send.click(fn=echo_markdown, inputs=[md_box, files], outputs=out)
+
+    gr.Markdown(f"_Built at {datetime.utcnow().isoformat()}Z — Gradio {gr.__version__}_")
 
 if __name__ == "__main__":
-    demo.queue().launch()
+    demo.launch()
