@@ -9,15 +9,15 @@ app_file: app.py
 pinned: false
 ---
 
-# AO v0.3.3 — Docker (Opinionated, no allowlist)
+# AO v0.3.4 — Docker (Workers scaffold)
 
-Changes
-- **ALLOWLIST_REPOS removed** from the write path. AO uses **AO_DEFAULT_REPO** as the single source of truth.
-- UI simplified: **no repo textbox**. Click **Run** and AO writes to AO_DEFAULT_REPO.
-- Keeps prior hardening: HOME set, repo-local git identity, auto-branch, auto plan/log, auto-commit heuristic.
-
-Config
-- `GITHUB_TOKEN` (required, repo write perms)
-- `AO_DEFAULT_REPO` (required, full https URL to the AO server repo)
-- `AO_AUTO_COMMIT` (optional; default true)
-- `OPENAI_API_KEY` (optional, Ask tab)
+What's new
+- `ops/plan.md` now includes a **Workers** section scaffold:
+  ```yaml
+  workers:
+    - name: (none yet)
+      repo: (to be assigned)
+      status: idle
+  ```
+- Everything else stays the same: single-source repo (`AO_DEFAULT_REPO`), auto branch, auto plan/log,
+  home/identity hardening, and auto-commit heuristic.

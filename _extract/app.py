@@ -1,4 +1,4 @@
-﻿import os, sys, json, time, re, shutil
+﻿import os, sys, json, time, shutil, re
 import gradio as gr
 
 # --- Hardening for slim containers ---
@@ -26,13 +26,12 @@ def status():
         "AO_DEFAULT_REPO": AO_DEFAULT_REPO,
         "AO_AUTO_COMMIT": AO_AUTO_COMMIT,
         "HOME": os.environ.get("HOME"),
-        "build": "AO v0.3.3 (Docker Opinionated)",
+        "build": "AO v0.3.4 (Docker)",
         "python": sys.version.split()[0],
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
 def _owner_repo_from_url(url: str):
-    import re
     m = re.match(r"https?://github.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url.strip())
     if not m:
         return None, None
@@ -43,7 +42,7 @@ def _auto_plan(repo_url: str):
     now = time.strftime("%Y-%m-%d %H:%M:%S")
     return f"""# Agentic Orchestrator Plan
 
-**Version**: AO v0.3.3 (Docker Opinionated)
+**Version**: AO v0.3.4 (Docker)
 **Repo**: {owner}/{repo}
 **When**: {now}
 
@@ -56,7 +55,7 @@ def _auto_plan(repo_url: str):
 1. Bootstrap repo with ops bundle.
 2. Read-only Git + Ask (quota permitting).
 3. Controlled write ops (ops/* only).
-4. Later: worker spawning & Space orchestration.
+4. Worker orchestration (spawn, patch, recover).
 
 ## Acceptance
 - ops files exist and are kept current.
@@ -66,6 +65,14 @@ def _auto_plan(repo_url: str):
 ## Guardrails
 - AO_DEFAULT_REPO; AO_AUTO_COMMIT heuristic.
 - Writes limited to ops/.
+
+## Workers
+```yaml
+workers:
+  - name: (none yet)
+    repo: (to be assigned)
+    status: idle
+```
 """
 
 def _auto_log_entry():
@@ -192,7 +199,6 @@ def save_progress_auto():
     except Exception as e:
         return json.dumps({"error": f"Save failed: {e}"}, indent=2)
 
-# --- Read-only Git tab retained for visibility ---
 def git_read(repo_url):
     from git import Repo
     work = RO_WORKDIR
@@ -226,8 +232,8 @@ def git_read(repo_url):
         info["error"] = str(e)
         return json.dumps(info, indent=2)
 
-with gr.Blocks(title="Agentic Orchestrator (AO) v0.3.3 — Docker") as demo:
-    gr.Markdown("## AO v0.3.3 — Docker (Opinionated, single-source repo)\nSet AO_DEFAULT_REPO once; click **Run**.")
+with gr.Blocks(title="Agentic Orchestrator (AO) v0.3.4 — Docker") as demo:
+    gr.Markdown("## AO v0.3.4 — Docker\nAdds **Workers** scaffold to `ops/plan.md`.")
 
     with gr.Tab("Status"):
         out_stat = gr.JSON(label="Environment")
