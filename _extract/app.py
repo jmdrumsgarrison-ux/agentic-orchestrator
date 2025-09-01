@@ -1,8 +1,7 @@
-﻿import os, re, json, time, shutil, yaml, requests, gradio as gr
+﻿import os, re, json, time, shutil, requests, gradio as gr
 from typing import List, Dict, Any
 from git import Repo, Actor as GitActor
 
-# ---------- ENV ----------
 HOME_DIR = "/tmp/ao_home"; os.makedirs(HOME_DIR, exist_ok=True); os.environ.setdefault("HOME", HOME_DIR)
 PORT = int(os.environ.get("PORT", "7860"))
 
@@ -10,15 +9,11 @@ GITHUB_TOKEN = SecretStrippedByGitPush"GITHUB_TOKEN", "")
 HF_TOKEN = SecretStrippedByGitPush"HF_TOKEN", "")
 AO_DEFAULT_REPO = os.environ.get("AO_DEFAULT_REPO", "").strip()
 OPENAI_API_KEY = SecretStrippedByGitPush"OPENAI_API_KEY", os.environ.get("openai_api_key",""))
-
 HF_NAMESPACE = os.environ.get("HF_NAMESPACE", "").strip()
 SPACE_ID = os.environ.get("SPACE_ID", "").strip()
-if not HF_NAMESPACE and SPACE_ID and ("/" in SPACE_ID):
-    HF_NAMESPACE = SPACE_ID.split("/")[0]
-
+if not HF_NAMESPACE and SPACE_ID and ("/" in SPACE_ID): HF_NAMESPACE = SPACE_ID.split("/")[0]
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
 
-# ---------- Helpers ----------
 def _gh_headers(): return {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
 def _hf_headers(): return {"Authorization": f"Bearer {HF_TOKEN}"}
 
@@ -29,15 +24,15 @@ def _gh_whoami():
     except: pass
     return "unknown"
 
-FRIENDLY = (
+INTRO = (
     "👋 Hi, I’m AO — Agentic Orchestrator.\n\n"
-    "Describe what you want to change or build. I’ll explore with you (goals, success, risks, options), "
-    "then *I* will suggest a Dev build when we’re really ready. I’ll fetch code from ChatGPT, patch a dev repo, "
-    "create a Dev Space, test, and iterate on errors. When stable, I’ll capture the change so we can promote it.\n\n"
-    "Everything starts as a dry‑run; nothing executes until you confirm.\n"
+    "Talk to me like you would in our old Drops loop. I’ll riff with you, surface options and trade‑offs, "
+    "and when it *feels* converged I’ll suggest a Dev build (I’ll fetch code from ChatGPT, patch a dev repo, "
+    "spin up a private Dev Space, test, and iterate on errors). When it’s stable, I’ll capture the change so we can promote it.\n\n"
+    "Nothing runs until you say yes; I always show a dry‑run summary first.\n"
 )
 
-# ---------- Git base ----------
+# ---- git helpers ----
 def _clone_base(work="/tmp/ao_base"):
     if os.path.exists(work): shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
@@ -49,29 +44,14 @@ def _clone_base(work="/tmp/ao_base"):
 
 def _commit_push(repo: Repo, paths: List[str], msg: str):
     actor = GitActor("AO Bot", "ao@example.com")
-    if paths:
-        repo.index.add(paths)
-    else:
-        repo.git.add(all=True)
+    if paths: repo.index.add(paths)
+    else: repo.git.add(all=True)
     repo.index.commit(msg, author=actor, committer=actor)
     for r in repo.remotes:
         try: r.push()
         except: pass
 
-def _list_repo_files(base: str) -> List[str]:
-    out = []
-    for r,_,fs in os.walk(base):
-        if "/.git" in r: continue
-        for f in fs:
-            out.append(os.path.relpath(os.path.join(r,f), base))
-    return out
-
-def _read_text(p):
-    try:
-        with open(p,"r",encoding="utf-8",errors="ignore") as f: return f.read()
-    except: return ""
-
-# ---------- Dev repo + Space ----------
+# ---- dev repo + space ----
 def _ensure_dev_repo(dev_name: str, seed_dir: str) -> str:
     login = _gh_whoami()
     repo_url = f"https://github.com/{login}/{dev_name}"
@@ -79,7 +59,6 @@ def _ensure_dev_repo(dev_name: str, seed_dir: str) -> str:
                       json={"name":dev_name,"private":True,"auto_init":False}, timeout=30)
     if r.status_code not in (201,422):
         raise RuntimeError(f"GitHub create repo failed: {r.status_code} {r.text[:160]}")
-
     dst_root = f"/tmp/dev_{dev_name}"; shutil.rmtree(dst_root, ignore_errors=True); os.makedirs(dst_root, exist_ok=True)
     dst = Repo.clone_from(repo_url.replace("https://", f"https://{GITHUB_TOKEN}@"), os.path.join(dst_root, "dst"))
     # copy tree
@@ -111,7 +90,7 @@ def _space_status(space_id: str) -> Dict[str,Any]:
     except Exception as e:
         return {"error": str(e)}
 
-# ---------- OpenAI patcher ----------
+# ---- LLM patcher ----
 def _openai_client():
     try:
         from openai import OpenAI
@@ -120,42 +99,40 @@ def _openai_client():
     except Exception:
         return None
 
-PATCH_SYSTEM = """You are a code refactoring assistant working on an app that runs in a Docker Hugging Face Space.
-User describes a change. You receive a repo tree snapshot (a few key files) and an optional last error.
-Return ONLY JSON with key "files": a list of {"path":"<relative path>", "content":"<full new file content>"}.
-No backticks or commentary, JSON only.
-"""
+PATCH_SYS = "Return JSON only with key 'files' as list of {path, content}. No commentary."
 
-def _summarize_repo(base: str, limit_chars=6000) -> str:
+def _summarize_repo(base: str, limit=6000) -> str:
     files = []
-    for path in _list_repo_files(base):
+    for r,_,fs in os.walk(base):
+        if "/.git" in r: continue
+        for f in fs:
+            p = os.path.join(r,f)
+            rel = os.path.relpath(p, base)
+            if rel.endswith((".py",".md","Dockerfile",".yaml",".yml",".toml")):
+                try:
+                    t = open(p,"r",encoding="utf-8",errors="ignore").read()
+                except: t = ""
+                if t and len(t) < 4000:
+                    files.append({"path":rel,"text":t})
         if len(files) > 12: break
-        if path.endswith((".py",".md","Dockerfile",".yaml",".yml",".toml")):
-            txt = _read_text(os.path.join(base,path))
-            if txt and len(txt) < 4000:
-                files.append({"path":path, "text":txt})
-    s = json.dumps({"files":files})
-    return s[:limit_chars]
+    return json.dumps({"files":files})[:limit]
 
 def _llm_patch(notes: List[str], summary: str, last_error: str="") -> List[Dict[str,str]]:
     client = _openai_client()
     if not client: return []
+    msg = (
+        "Proposed change notes:\\n" + "\\n".join(notes) +
+        "\\n\\nRepo summary JSON:\\n" + summary +
+        "\\n\\nLast error (if any):\\n" + (last_error or "(none)") +
+        "\\n\\nReturn JSON only with 'files'."
+    )
     try:
         resp = client.chat.completions.create(
             model=OPENAI_MODEL,
-            messages=[
-                {"role":"system","content":PATCH_SYSTEM},
-                {"role":"user","content":(
-                    "Proposed change notes:\\n"+ "\\n".join(notes) +
-                    "\\n\\nRepo summary JSON:\\n" + summary +
-                    "\\n\\nLast error (if any):\\n" + (last_error or "(none)") +
-                    "\\n\\nReturn JSON only."
-                )}
-            ],
+            messages=[{"role":"system","content":PATCH_SYS},{"role":"user","content":msg}],
             temperature=0.2
         )
-        txt = resp.choices[0].message.content.strip()
-        data = json.loads(txt)
+        data = json.loads(resp.choices[0].message.content.strip())
         return data.get("files", [])
     except Exception:
         return []
@@ -165,34 +142,10 @@ def _apply_files(base: str, files: List[Dict[str,str]]) -> List[str]:
     for f in files:
         p = f.get("path"); c = f.get("content","")
         if not p: continue
-        ap = os.path.join(base, p)
-        os.makedirs(os.path.dirname(ap), exist_ok=True)
+        ap = os.path.join(base,p); os.makedirs(os.path.dirname(ap), exist_ok=True)
         with open(ap,"w",encoding="utf-8") as w: w.write(c)
         changed.append(p)
     return changed
-
-# ---------- Conversation logic ----------
-GUIDE = [
-    "What’s the goal or outcome you want?",
-    "What would count as success (acceptance criteria)?",
-    "Any constraints or risks (auth, limits, cost, privacy)?",
-    "What options should we compare (e.g., HF Datasets, S3, Google Drive)?",
-]
-
-def _flag_coverage(notes: List[str]) -> Dict[str,bool]:
-    txt = " ".join(notes).lower()
-    return {
-        "goal": any(w in txt for w in ["goal","outcome","so that","because"]),
-        "success": any(w in txt for w in ["success","accept","done","pass","test"]),
-        "constraints": any(w in txt for w in ["risk","limit","quota","token","cost","privacy","security"]),
-        "options": any(w in txt for w in ["option","vs","versus","compare","s3","google drive","hf dataset","dataset","bucket"]),
-    }
-
-def _ready_to_offer(notes: List[str]) -> bool:
-    flags = _flag_coverage(notes)
-    coverage = sum(flags.values())
-    # Be conservative: 4+ turns and at least 2 categories touched
-    return (len(notes) >= 4) and (coverage >= 2)
 
 def _dev_build(notes: List[str], hardware="cpu-basic", max_attempts=3) -> Dict[str,Any]:
     repo, base = _clone_base("/tmp/ao_build")
@@ -203,51 +156,54 @@ def _dev_build(notes: List[str], hardware="cpu-basic", max_attempts=3) -> Dict[s
         if files:
             changed = _apply_files(base, files)
             _commit_push(repo, changed, f"feat(dev): attempt {i} - LLM patch")
-        # seed dev repo + space
         cr_id = time.strftime("%Y%m%d%H%M%S")
         dev_name = f"AO-dev-{cr_id}"
         gh_url = _ensure_dev_repo(dev_name, base)
         space_id = f"{HF_NAMESPACE}/{dev_name}" if HF_NAMESPACE else f"{_gh_whoami()}/{dev_name}"
-        sp = _ensure_dev_space(space_id, gh_url, hardware=hardware)
+        _ensure_dev_space(space_id, gh_url, hardware)
         status = _space_status(space_id)
-        ok = False
-        stage = (status.get("runtime",{}) or {}).get("stage","").lower()
-        if stage in ("running","sleeping","stopped"): ok = True
-        else: last_error = json.dumps(status)[:800]
-        if ok:
+        stage = (status.get('runtime',{}) or {}).get('stage','').lower()
+        if stage in ("running","sleeping","stopped"):
             return {"ok":True,"attempts":i,"dev_repo":gh_url,"space_id":space_id}
+        last_error = json.dumps(status)[:800]
         time.sleep(4)
     return {"ok":False,"last_error":last_error[:800]}
 
-def reset_chat():
-    return [("", FRIENDLY)], "", {"mode":"chat","notes":[],"offered":False,"dev":None}
+# ---- conversation helpers ----
+def _coverage(notes: List[str]) -> int:
+    t = " ".join(notes).lower()
+    cats = [
+        any(w in t for w in ["goal","outcome","so that","because"]),
+        any(w in t for w in ["success","accept","done","pass","test"]),
+        any(w in t for w in ["risk","limit","quota","token","cost","privacy","security"]),
+        any(w in t for w in ["option","vs","versus","compare","s3","google drive","hf dataset","dataset","bucket"]),
+    ]
+    return sum(cats)
 
-def _explore_reply(text: str, notes: List[str]) -> str:
-    # Offer thoughtful exploration like our drops conversation.
+def _insightful_reply(text: str) -> str:
     t = text.lower()
-    suggestions = []
-    if "storage" in t or "persist" in t:
-        suggestions.append(
-            "For persistent storage on Spaces, options include:\n"
-            "- **HF Datasets** (simple, versioned, good for artifacts)\n"
-            "- **S3/compatible** (scales, but needs creds)\n"
-            "- **Google Drive** (easy, but OAuth + rate limits)\n"
-            "Trade‑offs: cost, auth complexity, write frequency, privacy."
+    parts = []
+    if "storage" in t or "persist" in t or "artifact" in t:
+        parts.append(
+            "On Spaces, persistence is non‑trivial. Practical routes:\n"
+            "• **HF Datasets** – simple, versioned, great for artifacts/logs; pay by usage.\n"
+            "• **S3/compatible** – scales and cheap at volume; needs key mgmt and SDK wiring.\n"
+            "• **Google Drive** – easy for light assets; OAuth/rate limits can bite in prod.\n"
+            "My bias: start with HF Datasets for small/medium artifacts, move to S3 when throughput or cost matter."
         )
+    if "image" in t and "generate" in t:
+        parts.append("For generated images, write a small store() helper (filename = UTC timestamp + hash) and a list() view. That keeps the UI snappy and storage tidy.")
     if "gui" in t or "tab" in t or "button" in t:
-        suggestions.append(
-            "On the GUI side, we could add a **Settings** tab for storage target, "
-            "plus a small status area showing last sync/results."
-        )
-    flags = _flag_coverage(notes)
-    ask = None
-    if not flags["goal"]: ask = GUIDE[0]
-    elif not flags["success"]: ask = GUIDE[1]
-    elif not flags["constraints"]: ask = GUIDE[2]
-    elif not flags["options"]: ask = GUIDE[3]
-    else: ask = "Anything else before we consider a Dev build?"
-    extra = ("\n\n" + "\n\n".join(suggestions)) if suggestions else ""
-    return f"{ask}{extra}"
+        parts.append("UX tweak idea: a **Storage** panel with destination selector (Datasets/S3/Drive), latest save status, and a quick-open link to the browse page.")
+    if not parts:
+        parts.append("Got it. Tell me a bit more and I’ll riff on options and trade‑offs.")
+    return "\n\n".join(parts) + "\n\nDoes that direction line up with what you have in mind?"
+
+def _ready(notes: List[str]) -> bool:
+    return (len(notes) >= 4) and (_coverage(notes) >= 2)
+
+def reset_chat():
+    return [("", INTRO)], "", {"mode":"chat","notes":[],"offered":False,"dev":None}
 
 def step_chat(history, user_text, state):
     history = history or []
@@ -255,12 +211,11 @@ def step_chat(history, user_text, state):
     text = (user_text or "").strip()
     if not text: return history, "", state
 
-    # If user accepts a proposed dev build
+    # if user accepts dev build
     if state.get("offered") and re.search(r"\\b(yes|ok|sure|go ahead|proceed|let.?s try)\\b", text.lower()):
-        plan = ("Dev build plan: I'll fetch code suggestions, patch a dev repo, create a private Dev Space, "
-                "and iterate up to 3 attempts before reporting back. (dry‑run shown; confirm to execute)")
+        plan = ("Dev build plan: fetch code from ChatGPT, patch dev repo, create private Dev Space, iterate up to 3 times; "
+                "report results. (dry‑run shown; executing now)")
         history = history + [(text, f"**Dry‑run summary**\\n- {plan}\\n- Hardware: cpu-basic")]
-        # Immediate execute after dry-run summary (user already confirmed affirmative)
         try:
             res = _dev_build(state["notes"], "cpu-basic", 3)
         except Exception as e:
@@ -268,34 +223,33 @@ def step_chat(history, user_text, state):
         state["offered"] = False
         state["dev"] = res
         if res.get("ok"):
-            reply = (f"✅ Dev build succeeded (attempt {res['attempts']}).\\n"
-                     f"- Dev Space: `{res['space_id']}`\\n- Dev Repo: {res['dev_repo']}`\\n"
-                     "I’ve captured this as a change. We can promote when you’re ready.")
+            msg = (f"✅ Dev build succeeded (attempt {res['attempts']}).\\n"
+                   f"- Dev Space: `{res['space_id']}`\\n- Dev Repo: {res['dev_repo']}\\n"
+                   "I’ve captured this change so we can promote it when you’re ready.")
         else:
-            reply = f"❌ Dev build didn’t stabilize. Last signal:\\n```json\\n{json.dumps(res,indent=2)}\\n```\\nWe can tweak the idea or retry."
-        return history + [("", reply)], "", state
+            msg = f"❌ Dev build didn’t stabilize. Last signal:\\n```json\\n{json.dumps(res,indent=2)}\\n```\\nWe can refine and retry."
+        return history + [("", msg)], "", state
 
-    # Detect "change" discussion
-    if any(w in text.lower() for w in ["change","modify","update","add ","remove ","gui","tab","button","storage","persist","space","spawn"]):
+    # detect intent to change/build
+    if any(w in text.lower() for w in ["change","modify","update","add ","remove ","storage","persist","artifact","gui","tab","button","space","spawn","image"]):
         state["mode"] = "discuss"
         state["notes"].append(text)
-        # If ready, offer; else explore
-        if _ready_to_offer(state["notes"]):
+        if _ready(state["notes"]):
             state["offered"] = True
-            return history + [(text, "I think we’ve converged — should I try a **Dev build**?")], "", state
+            return history + [(text, "It feels like we’re aligned. Want me to try a **Dev build** to validate this?")], "", state
         else:
-            return history + [(text, _explore_reply(text, state["notes"]))], "", state
+            return history + [(text, _insightful_reply(text))], "", state
 
-    # Continue discussion mode
+    # ongoing discussion
     if state.get("mode") == "discuss":
         state["notes"].append(text)
-        if _ready_to_offer(state["notes"]) and not state.get("offered"):
+        if _ready(state["notes"]) and not state.get("offered"):
             state["offered"] = True
-            return history + [(text, "This feels clear. Want me to try a **Dev build** now?")], "", state
-        return history + [(text, _explore_reply(text, state["notes"]))], "", state
+            return history + [(text, "Sounds converged. Shall I kick off a **Dev build**?")], "", state
+        return history + [(text, _insightful_reply(text))], "", state
 
-    # Default chat
-    return history + [(text, "Got it — I’m taking notes. Tell me more and I’ll suggest a Dev build when it’s ready.")], "", state
+    # default chat
+    return history + [(text, "Noted. Keep going — I’ll suggest options and a Dev build when we’ve got enough shape.")], "", state
 
 def ui_status():
     return {
@@ -305,11 +259,11 @@ def ui_status():
         "HF_TOKEN_present": bool(HF_TOKEN),
         "OPENAI_API_KEY_present": bool(OPENAI_API_KEY),
         "SPACE_ID": SPACE_ID or "(unset)",
-        "build": "AO v0.6.6 (Docker) — Explore first, propose Dev build on convergence"
+        "build": "AO v0.6.7 (Docker) — Drop-style exploration, no questionnaire tone"
     }
 
-with gr.Blocks(title="AO v0.6.6") as demo:
-    gr.Markdown("## AO v0.6.6 — Conversational Dev builds (explore first, AO proposes when ready).")
+with gr.Blocks(title="AO v0.6.7") as demo:
+    gr.Markdown("## AO v0.6.7 — Conversational Dev builds (Drop-style exploration, AO proposes when ready).")
     with gr.Tab("Status"):
         env = gr.JSON()
         demo.load(ui_status, outputs=env)
@@ -320,7 +274,7 @@ with gr.Blocks(title="AO v0.6.6") as demo:
         reset = gr.Button("Reset")
         state = gr.State({"mode":"chat","notes":[],"offered":False,"dev":None})
         def _reset():
-            return [("", FRIENDLY)], "", {"mode":"chat","notes":[],"offered":False,"dev":None}
+            return [("", INTRO)], "", {"mode":"chat","notes":[],"offered":False,"dev":None}
         demo.load(_reset, outputs=[chat, txt, state])
         reset.click(_reset, outputs=[chat, txt, state])
         send.click(step_chat, inputs=[chat, txt, state], outputs=[chat, txt, state])
