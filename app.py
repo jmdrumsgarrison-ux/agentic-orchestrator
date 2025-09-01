@@ -11,7 +11,7 @@ def status():
         "GITHUB_TOKEN_present": bool(GITHUB_TOKEN),
         "python": sys.version.split()[0],
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "build": "AO v0.1.0 (Docker, fixed metadata)"
+        "build": "AO v0.1.0 (Docker)"
     }
 
 def ask_chatgpt(question, context=""):
@@ -73,7 +73,7 @@ def git_read(repo_url):
         return json.dumps(info, indent=2)
 
 with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.0 — Docker") as demo:
-    gr.Markdown("## AO v0.1.0 — Docker (fixed metadata)\nGUI + ChatGPT + Read-only Git")
+    gr.Markdown("## AO v0.1.0 — Docker\nGUI + ChatGPT + Read-only Git")
 
     with gr.Tab("Status"):
         btn_stat = gr.Button("Check Status")
@@ -95,5 +95,4 @@ with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.0 — Docker") as demo:
         btn_git.click(fn=git_read, inputs=url, outputs=out_git)
 
 if __name__ == "__main__":
-    demo.queue().launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", "7860")), show_error=True)
-
+    demo.queue().launch(server_name="0.0.0.0", server_port=PORT, show_error=True)
