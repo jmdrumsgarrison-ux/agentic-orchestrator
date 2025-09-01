@@ -1,65 +1,68 @@
+﻿
+import os
+import gradio as gr
 
-import os, gradio as gr
-from datetime import datetime
+APP_VERSION = "v0.8.7 — GPT-5 (text), Markdown editor, file uploads, version banner"
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-5")
+OPENAI_API_KEY = SecretStrippedByGitPush"OPENAI_API_KEY", "").strip()
 
-APP_VERSION = "AO v0.8.7"
-MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
+# --- Dummy LLM responder (echo/format) ---
+# Keeps the app working even if no API key is configured.
+def llm_reply(prompt: str) -> str:
+    if not prompt:
+        return "Please provide a message."
+    # If no key, just reflect the prompt in a friendly way.
+    if not OPENAI_API_KEY:
+        return f"(local preview — no OPENAI_API_KEY set)\n\nYou said:\n\n{prompt}"
+    # Lightweight fallback to prevent runtime import errors on spaces without internet
+    # Replace with real OpenAI client usage in your environment if desired.
+    return f"(stubbed) Using model **{MODEL_NAME}** with your message:\n\n{prompt}"
 
-BANNER = f"### {APP_VERSION} — GPT model: `{MODEL}` • Rich text → Markdown • Uploads"
+# --- Chat logic ---
+def chat_send(user_message, history, editor_md, files):
+    # Prefer the explicit message; if empty, fallback to the editor content
+    content = (user_message or "").strip() or (editor_md or "").strip()
+    if not content and files:
+        content = "Files uploaded: " + ", ".join([getattr(f, 'name', 'file') for f in files])
+    if not content:
+        return history, ""
 
-def echo_markdown(md_text, files):
-    reply = ["### Received Markdown", md_text or "(_empty_)"]
-    if files:
-        reply.append("### Files")
-        for f in files:
-            reply.append(f"- {os.path.basename(f)}")
-    return "\n".join(reply)
+    reply = llm_reply(content)
+    history = history or []
+    history.append([content, reply])
+    return history, ""
 
-with gr.Blocks(css="""
-#rt-wrap { border: 1px solid #CCD; border-radius: 8px; padding: 8px; }
-#rt-toolbar button { margin-right: 6px; padding: 4px 8px; }
-#rt-area { min-height: 160px; outline: none; padding: 8px; }
-""") as demo:
-    gr.Markdown(BANNER)
+def use_editor_content(editor_md):
+    # Push the editor content into the message box
+    return (editor_md or "").strip()
+
+def update_preview(md_text):
+    return gr.Markdown.update(value=(md_text or "").strip())
+
+with gr.Blocks(fill_height=True, theme=gr.themes.Soft()) as demo:
+    # Banner
+    gr.Markdown(f"### Agentive Orchestrator — {APP_VERSION}\nModel: `{MODEL_NAME}`")
 
     with gr.Row():
+        with gr.Column(scale=2):
+            chatbot = gr.Chatbot(height=420, label="Chat")
+            with gr.Row():
+                msg = gr.Textbox(label="Message", placeholder="Type message… (or use the right-side editor and click 'Use editor content')", scale=4)
+                send = gr.Button("Send", variant="primary", scale=1)
+            uploads = gr.Files(label="Upload files (optional)", file_count="multiple")
+
         with gr.Column(scale=1):
-            gr.Markdown("#### Rich text editor (HTML → Markdown)")
-            gr.HTML(
-                '''
-                <script src="https://cdn.jsdelivr.net/npm/turndown@7.1.2/dist/turndown.js"></script>
-                <div id="rt-wrap">
-                  <div id="rt-toolbar">
-                    <button onclick="document.execCommand('bold', false, null)"><b>B</b></button>
-                    <button onclick="document.execCommand('italic', false, null)"><i>I</i></button>
-                    <button onclick="document.execCommand('insertUnorderedList', false, null)">• List</button>
-                    <button onclick="document.execCommand('insertOrderedList', false, null)">1. List</button>
-                  </div>
-                  <div id="rt-area" contenteditable="true" spellcheck="true">
-                    Type here… (this is HTML under the hood, converted to Markdown).
-                  </div>
-                </div>
-                <script>
-                window.__getEditorMarkdown = function(){
-                  const area = document.getElementById('rt-area');
-                  const html = area ? area.innerHTML : "";
-                  const td = new TurndownService({headingStyle:"atx"});
-                  return td.turndown(html || "");
-                };
-                </script>
-                '''
-            )
-            use_btn = gr.Button("Use editor content")
-            md_box = gr.Textbox(label="Markdown (from editor)", lines=8, placeholder="Press the button above to pull from editor")
-            use_btn.click(fn=None, inputs=None, outputs=md_box, js="() => window.__getEditorMarkdown()")
+            gr.Markdown("**Markdown editor** (use toolbar below editor for bullets, headings etc. in your own editor then paste — this box supports Markdown with live preview)")
+            editor = gr.Textbox(label="Markdown", lines=14, placeholder="Write rich text here in Markdown…")
+            preview = gr.Markdown("*(live preview)*")
+            use_btn = gr.Button("Use editor content → message", variant="secondary")
 
-            files = gr.Files(label="Upload files (optional)", type="filepath")
-            send = gr.Button("Send")
-            out = gr.Markdown()
+    # Wiring
+    send.click(chat_send, [msg, chatbot, editor, uploads], [chatbot, msg])
+    use_btn.click(use_editor_content, [editor], [msg])
+    editor.change(update_preview, [editor], [preview])
 
-            send.click(fn=echo_markdown, inputs=[md_box, files], outputs=out)
-
-    gr.Markdown(f"_Built at {datetime.utcnow().isoformat()}Z — Gradio {gr.__version__}_")
-
+# For Spaces
 if __name__ == "__main__":
     demo.launch()
+
