@@ -1,4 +1,4 @@
-﻿import os, sys, subprocess, json, time, re
+﻿import os, sys, subprocess, json, time, re, shutil
 import gradio as gr
 
 OPENAI_API_KEY = SecretStrippedByGitPush"OPENAI_API_KEY", "")
@@ -13,7 +13,7 @@ def status():
         "ALLOWLIST_REPOS": ALLOWLIST_REPOS,
         "python": sys.version.split()[0],
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "build": "AO v0.2.0 (Docker)"
+        "build": "AO v0.3.0 (Docker)"
     }
 
 def ask_chatgpt(question, context=""):
@@ -46,7 +46,7 @@ def ask_chatgpt(question, context=""):
     except Exception as e:
         return f"[exception] {e}"
 
-# ---------- Read-only Git (to /tmp/repo_ro) ----------
+# ---------- Read-only Git ----------
 RO_WORKDIR = "/tmp/repo_ro"
 
 def git_read(repo_url):
@@ -90,11 +90,11 @@ def git_read(repo_url):
         info["error"] = str(e)
         return json.dumps(info, indent=2)
 
-# ---------- Save Progress to Git (safe write) ----------
+# ---------- Save Progress to Git (with empty-repo bootstrap) ----------
 RW_WORKDIR = "/tmp/repo_rw"
 
 def _owner_repo_from_url(url: str):
-    m = re.match(r"https?://github.com/([^/]+)/([^/]+)(?:.git)?/?$", url.strip())
+    m = re.match(r"https?://github.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url.strip())
     if not m:
         return None, None
     return m.group(1), m.group(2)
@@ -107,6 +107,19 @@ def _ensure_allowed(url: str):
         return False, "Repo URL must be like https://github.com/owner/repo"
     key = f"{owner}/{repo}"
     return (key in ALLOWLIST_REPOS), f"Repo {key} not in ALLOWLIST_REPOS: {ALLOWLIST_REPOS}"
+
+def _repo_is_empty(repo):
+    # A freshly created GitHub repo with no commits has no HEAD/refs
+    try:
+        if repo.head.is_valid():
+            return False
+    except Exception:
+        pass
+    # also check refs/heads
+    try:
+        return len(list(repo.refs)) == 0
+    except Exception:
+        return True
 
 def save_progress(repo_url, branch, plan_text, log_text, dry_run=True, author_name="", author_email=""):
     ok, err = _ensure_allowed(repo_url)
@@ -121,89 +134,109 @@ def save_progress(repo_url, branch, plan_text, log_text, dry_run=True, author_na
 
     from git import Repo, Actor, GitCommandError
 
-    # fresh clone for write ops
     local = os.path.join(RW_WORKDIR, "repo")
     if os.path.exists(local):
-        # wipe to avoid mixing repos
-        import shutil
         shutil.rmtree(local, ignore_errors=True)
 
-    src = repo_url.strip()
-    if src.startswith("https://github.com/"):
-        src_auth = src.replace("https://", f"https://{GITHUB_TOKEN}@")
-    else:
-        return json.dumps({"error": "Only https://github.com/ URLs are supported in this build."}, indent=2)
+    if not repo_url.startswith("https://github.com/"):
+        return json.dumps({"error": "Only https://github.com URLs are supported."}, indent=2)
+
+    src_auth = repo_url.replace("https://", f"https://{GITHUB_TOKEN}@")
 
     try:
         repo = Repo.clone_from(src_auth, local, depth=1)
     except Exception as e:
         return json.dumps({"error": f"Clone failed: {e}"}, indent=2)
 
-    # choose branch
+    initialized = False
     try:
-        if not branch:
-            # try main then master
-            for b in ["main", "master"]:
-                if b in repo.refs:
-                    branch = b
-                    break
-            if not branch:
-                branch = repo.active_branch.name if not repo.head.is_detached else None
-        if branch:
-            repo.git.checkout(branch)
-    except Exception as e:
-        return json.dumps({"error": f"Branch checkout failed: {e}"}, indent=2)
+        if _repo_is_empty(repo):
+            # bootstrap: create orphan main branch and first commit
+            repo.git.checkout("--orphan", "main")
+            ops_dir = os.path.join(local, "ops")
+            os.makedirs(ops_dir, exist_ok=True)
+            with open(os.path.join(ops_dir, "plan.md"), "w", encoding="utf-8") as f:
+                f.write(plan_text or "# Plan\n\n- initial goals / phases / acceptance\n")
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            with open(os.path.join(ops_dir, "logbook.md"), "a", encoding="utf-8") as f:
+                f.write(f"## {ts}\nInitialized AO logbook.\n")
+            repo.git.add(all=True)
+            if dry_run:
+                diff_text = repo.git.diff("--cached")
+                # reset index to leave repo pristine
+                repo.git.reset()
+                return json.dumps({
+                    "repo": repo_url, "branch": "main (new)",
+                    "workdir": RW_WORKDIR, "dry_run": True,
+                    "bootstrap": True,
+                    "changed_files": ["ops/plan.md", "ops/logbook.md"],
+                    "diff_preview": diff_text
+                }, indent=2)
+            author = Actor(author_name or "AO Bot", author_email or "ao@example.com")
+            repo.index.commit(f"chore(ops): bootstrap AO files")
+            # set upstream and push first commit
+            repo.git.push("--set-upstream", "origin", "main")
+            head = repo.head.commit.hexsha
+            initialized = True
+            return json.dumps({
+                "repo": repo_url, "branch": "main (new)",
+                "workdir": RW_WORKDIR, "dry_run": False,
+                "bootstrap": True,
+                "committed": ["ops/plan.md", "ops/logbook.md"],
+                "head": head
+            }, indent=2)
 
-    # create ops files
-    ops_dir = os.path.join(local, "ops")
-    os.makedirs(ops_dir, exist_ok=True)
+        # Non-empty repo path (existing branch/commits)
+        # determine branch
+        target_branch = branch
+        try:
+            if not target_branch:
+                for b in ["main", "master"]:
+                    if b in repo.refs:
+                        target_branch = b
+                        break
+            if target_branch:
+                repo.git.checkout(target_branch)
+        except Exception as e:
+            return json.dumps({"error": f"Branch checkout failed: {e}"}, indent=2)
 
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    # plan.md: overwrite with provided text (idempotent by content)
-    plan_path = os.path.join(ops_dir, "plan.md")
-    with open(plan_path, "w", encoding="utf-8") as f:
-        f.write(plan_text or "# Plan\n\n- (fill me)\n")
-
-    # logbook.md: append an entry
-    log_path = os.path.join(ops_dir, "logbook.md")
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write(f"\n## {ts}\n")
-        f.write((log_text or "Initialized AO logbook.") + "\n")
-
-    repo.git.add([plan_path, log_path])
-
-    # show diff (cached = staged)
-    diff_text = repo.git.diff("--cached")
-
-    if dry_run:
-        # reset index so nothing remains staged
-        repo.git.reset()
-        return json.dumps({
-            "repo": repo_url, "branch": branch or "(auto)",
-            "workdir": RW_WORKDIR, "dry_run": True,
-            "changed_files": ["ops/plan.md", "ops/logbook.md"],
-            "diff_preview": diff_text
-        }, indent=2)
-
-    # real commit & push
-    try:
+        ops_dir = os.path.join(local, "ops")
+        os.makedirs(ops_dir, exist_ok=True)
+        plan_path = os.path.join(ops_dir, "plan.md")
+        with open(plan_path, "w", encoding="utf-8") as f:
+            f.write(plan_text or "# Plan\n\n- (fill me)\n")
+        log_path = os.path.join(ops_dir, "logbook.md")
+        with open(log_path, "a", encoding="utf-8") as f:
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"\n## {ts}\n")
+            f.write((log_text or "Updated by AO.") + "\n")
+        repo.git.add([plan_path, log_path])
+        diff_text = repo.git.diff("--cached")
+        if dry_run:
+            repo.git.reset()
+            return json.dumps({
+                "repo": repo_url, "branch": target_branch or "(auto)",
+                "workdir": RW_WORKDIR, "dry_run": True,
+                "bootstrap": False,
+                "changed_files": ["ops/plan.md", "ops/logbook.md"],
+                "diff_preview": diff_text
+            }, indent=2)
         author = Actor(author_name or "AO Bot", author_email or "ao@example.com")
-        repo.index.commit(f"chore(ops): update plan/logbook via AO @ {ts}", author=author, committer=author)
-        repo.remotes.origin.push()  # uses token via remote URL
+        repo.index.commit(f"chore(ops): update plan/logbook via AO")
+        repo.remotes.origin.push()
         head = repo.head.commit.hexsha
         return json.dumps({
-            "repo": repo_url, "branch": branch or "(auto)",
+            "repo": repo_url, "branch": target_branch or "(auto)",
             "workdir": RW_WORKDIR, "dry_run": False,
+            "bootstrap": False,
             "committed": ["ops/plan.md", "ops/logbook.md"],
             "head": head
         }, indent=2)
-    except GitCommandError as ge:
-        return json.dumps({"error": f"Push failed: {ge}"}, indent=2)
     except Exception as e:
-        return json.dumps({"error": f"Commit failed: {e}"}, indent=2)
+        return json.dumps({"error": f"Save failed: {e}", "initialized": initialized}, indent=2)
 
-with gr.Blocks(title="Agentic Orchestrator (AO) v0.2.0 — Docker") as demo:
-    gr.Markdown("## AO v0.2.0 — Docker\nGUI + ChatGPT + Read-only Git + **Save Progress to Git (safe)**")
+with gr.Blocks(title="Agentic Orchestrator (AO) v0.3.0 — Docker") as demo:
+    gr.Markdown("## AO v0.3.0 — Docker\nGUI + ChatGPT + Read-only Git + **Save Progress to Git (now bootstraps empty repos)**")
 
     with gr.Tab("Status"):
         btn_stat = gr.Button("Check Status")
@@ -225,9 +258,9 @@ with gr.Blocks(title="Agentic Orchestrator (AO) v0.2.0 — Docker") as demo:
         btn_git.click(fn=git_read, inputs=url, outputs=out_git)
 
     with gr.Tab("Save Progress to Git"):
-        gr.Markdown("Write an `ops/` bundle to your repo with **Diff Preview** and **Dry Run**.")
+        gr.Markdown("Initialize empty repos or update existing ones with an `ops/` bundle. **Dry Run** shows diff without pushing.")
         s_repo = gr.Textbox(label="Repository URL", placeholder="https://github.com/owner/repo")
-        s_branch = gr.Textbox(label="Branch (optional)", placeholder="main or master (auto-detect if empty)")
+        s_branch = gr.Textbox(label="Branch (optional)", placeholder="main or master (auto / create for empty repo)")
         s_plan = gr.Textbox(label="ops/plan.md", lines=8, placeholder="# Plan\n\n- goals / phases / acceptance\n")
         s_log = gr.Textbox(label="ops/logbook.md (entry to append)", lines=6, placeholder="Initial log entry…")
         s_dry = gr.Checkbox(value=True, label="Dry Run (don't commit/push)", info="Shows diff; no changes pushed.")

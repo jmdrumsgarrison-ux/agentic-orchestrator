@@ -9,21 +9,19 @@ app_file: app.py
 pinned: false
 ---
 
-# AO v0.2.0 — Docker
+# AO v0.3.0 — Docker
 
-What's new
-- **Save Progress to Git** tab (safe write):
-  - Writes an `ops/` bundle (`plan.md`, `logbook.md`).
-  - **Diff preview** before committing.
-  - **Dry Run** default ON (no push until you uncheck).
-  - Optional branch selection (auto-detects if empty).
-  - Uses `GITHUB_TOKEN` for authenticated pushes (required for private repos or when you cannot push anonymously).
+## What's new
+- **Save Progress to Git can bootstrap an empty repo**:
+  - Detects empty GitHub repo (no commits / no default branch).
+  - Creates an **orphan `main` branch**, writes `ops/plan.md` + `ops/logbook.md`, and pushes the **first commit**.
+  - If a branch exists, behavior is unchanged (diff preview, optional dry-run).
 
-Paths
-- Read-only Git clones to: `/tmp/repo_ro`
-- Save-to-Git clones to: `/tmp/repo_rw`
+## Paths
+- Read-only clone: `/tmp/repo_ro`
+- Save-to-Git working clone: `/tmp/repo_rw`
 
-Env / Secrets
-- `OPENAI_API_KEY` — for Ask ChatGPT (API billing must be enabled).
-- `GITHUB_TOKEN` — for pushing commits in Save-to-Git.
-- `ALLOWLIST_REPOS` (optional) — comma-separated list of `owner/repo` allowed to modify.
+## Secrets / env
+- `GITHUB_TOKEN` — required for Save-to-Git (write permissions).
+- `OPENAI_API_KEY` — for Ask ChatGPT (optional; API billing required).
+- `ALLOWLIST_REPOS` — optional CSV of `owner/repo` allowed for writes.
