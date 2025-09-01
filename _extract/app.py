@@ -18,15 +18,12 @@ PORT = int(os.environ.get("PORT", "7860"))
 
 FRIENDLY = (
     "👋 Hi, I’m AO — Agentic Orchestrator.\n\n"
-    "Chat with me about anything. When I recognize a supported action, I’ll show a **dry‑run plan** first and only run it after you say **yes**.\n\n"
+    "Chat with me about anything. When a supported action is ready, I’ll show a **dry‑run plan** first and only run it after you say **yes**.\n\n"
     "I can:\n"
-    "• Open Change Requests (CRs) and spin up Dev Spaces\n"
+    "• Discuss and draft Change Requests (CRs), then spin up Dev Spaces\n"
     "• Create Hugging Face Spaces from public GitHub repos\n"
     "• Show deployments and promote a CR to prod\n\n"
-    "Try:\n"
-    "• open a change request: add a deployments tab\n"
-    "• create a space from https://github.com/owner/repo called aow-myspace on cpu\n"
-    "• show deployments\n"
+    "Tip: you can start informally (e.g., “I want to change the GUI”). I’ll help refine it. When ready, say “draft the CR”.\n"
 )
 
 # ---------- Utilities ----------
@@ -149,8 +146,12 @@ def _extract_fields(text: str):
 
 def _intent(text: str):
     t = (text or "").lower()
-    if any(k in t for k in ["open a change request", "create change request", "new change request", "open cr"]):
-        return "open_cr"
+    # explicit formalization requests for CR
+    if re.search(r"\\b(draft|prepare|create|open|start)\\b.*\\b(cr|change request)\\b", t):
+        return "cr_formalize"
+    # conversational change ideas
+    if any(k in t for k in ["change", "modify", "update", "add ", "remove ", "improve", "revamp", "redesign", "gui", "tab", "button", "page", "workflow"]):
+        return "cr_discuss"
     if re.search(r"\\bpromote\\s+cr\\s+\\d+", t):
         return "promote_cr"
     if re.search(r"\\bdelete\\s+dev\\s+\\d+", t):
@@ -291,12 +292,28 @@ def _execute_create_space(owner, plan):
 
 # ---------- Chat handlers ----------
 def reset_chat():
-    return [("", FRIENDLY)], "", {"pending":{}}
+    return [("", FRIENDLY)], "", {"pending":{"mode":None}}
+
+def _append_discussion(state, user_text):
+    p = state.get("pending") or {}
+    notes = p.get("notes") or []
+    if user_text.strip():
+        notes.append(user_text.strip())
+    p["notes"] = notes
+    state["pending"] = p
+    return state
+
+def _cr_title_from_pending(pending):
+    topic = (pending.get("topic") or "").strip()
+    if not topic and pending.get("notes"):
+        topic = pending["notes"][0]
+    title = re.sub(r"\\s+", " ", topic)[:160] or "Unspecified change"
+    return title
 
 def step_chat(history, user_text, state):
     history = history or []
-    state = state or {"pending":{}}
-    pending = state.get("pending") or {}
+    state = state or {"pending":{"mode":None}}
+    pending = state.get("pending") or {"mode":None}
 
     text = (user_text or "").strip()
     if not text:
@@ -304,16 +321,66 @@ def step_chat(history, user_text, state):
 
     intent = _intent(text)
 
-    # --- Always dry-run for actionable intents ---
-    if intent == "open_cr":
-        title = re.sub(r"open (a )?change request[:]?\s*", "", text, flags=re.I).strip() or "Unspecified change"
-        plan = {"intent":"open_cr","title":title}
-        card = _plan_card("Planned Change Request",
-                          [f"Title: {title}", "Creates CR file, seeds Dev repo/Space, updates registry"],
-                          plan_yaml=yaml.safe_dump(plan, sort_keys=False))
-        pending["plan"]=plan
-        return history + [(text, card)], "", {"pending":pending}
+    # --- Conversational CR discussion ---
+    if intent == "cr_discuss":
+        # Enter/continue discussion mode
+        pending["mode"] = "cr_discuss"
+        if not pending.get("topic"):
+            pending["topic"] = text
+            pending["notes"] = []
+            reply = ("Sounds like a change we’d track as a **Change Request (CR)**.\n"
+                     "Tell me more so I can help shape it:\n"
+                     "• What exactly do you want to change? (scope)\n"
+                     "• Why? (goal / value)\n"
+                     "• Any acceptance criteria or must‑haves?\n"
+                     "• Any concerns (risk, tokens, rate limits)?\n\n"
+                     "When you’re ready, say **“draft the CR”** and I’ll prepare a plan.")
+        else:
+            state = _append_discussion(state, text)
+            reply = ("Got it. Anything else you want to add? When ready, say **“draft the CR”** and I’ll prepare a plan.")
+        state["pending"] = pending
+        return history + [(text, reply)], "", state
 
+    # If user explicitly asks to formalize (draft/prepare/create/open CR)
+    if intent == "cr_formalize" or (pending.get("mode") == "cr_discuss" and re.search(r"\\b(draft|prepare)\\b.*\\b(cr|change request)\\b", text.lower())):
+        pending["mode"] = "cr_drafting"
+        state = _append_discussion(state, text)
+        title = _cr_title_from_pending(pending)
+        plan = {"intent":"open_cr","title":title}
+        card = "### Planned Change Request\\n" + \
+               f"- Title: {title}\\n- Creates CR file, seeds Dev repo/Space, updates registry\\n"
+        if pending.get("notes"):
+            notes_md = "\\n".join(f"  - {n}" for n in pending["notes"][:10])
+            card += "\\nNotes collected so far:\\n" + notes_md + "\\n"
+        card += "\\n```yaml\\n" + yaml.safe_dump(plan, sort_keys=False) + "```\\n\\nReply **yes** to proceed."
+        pending["plan"]=plan
+        state["pending"] = pending
+        return history + [(text, card)], "", state
+
+    # --- Confirm execution ---
+    if re.search(r"\\b(yes|proceed|do it|go ahead)\\b", text.lower()) and state.get("pending",{}).get("plan"):
+        plan = state["pending"]["plan"]
+        if plan["intent"]=="open_cr":
+            res = _create_cr(plan["title"], dry_run=False)
+            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{"mode":None}}
+        if plan["intent"]=="create_space_from_repo":
+            owner, _ = _owner_repo_from_url(AO_DEFAULT_REPO)
+            res = _execute_create_space(owner, plan)
+            try:
+                repo, base = _clone("/tmp/ao_log_exec")
+                logp = _append_logbook(base, "Create HF Space from GitHub repo", f"```json\\n{json.dumps(res, indent=2)}\\n```")
+                _commit_and_push(repo, [logp], "chore(log): create space")
+            except Exception:
+                pass
+            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{"mode":None}}
+        if plan["intent"]=="promote":
+            res = _promote(plan["cr_id"])
+            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{"mode":None}}
+        if plan["intent"]=="delete_dev":
+            res = _delete_dev(plan["cr_id"])
+            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{"mode":None}}
+
+    # --- Other actionable intents (always dry-run first) ---
     if intent == "create_space":
         fields = _extract_fields(text)
         for k,v in fields.items():
@@ -331,9 +398,9 @@ def step_chat(history, user_text, state):
             "space_id": f"{HF_NAMESPACE or owner}/{pending['name']}",
             "hardware": pending.get("hardware","cpu-basic"),
         }
-        card = _plan_card("Planned Space Creation",
-                          [f"From repo: {plan['repo_url']}", f"As Space: {plan['space_id']}", f"Hardware: {plan['hardware']}"],
-                          plan_yaml=yaml.safe_dump(plan, sort_keys=False))
+        card = "### Planned Space Creation\\n" + \
+               f"- From repo: {plan['repo_url']}\\n- As Space: {plan['space_id']}\\n- Hardware: {plan['hardware']}\\n"
+        card += "\\n```yaml\\n" + yaml.safe_dump(plan, sort_keys=False) + "```\\n\\nReply **yes** to proceed."
         pending["plan"]=plan
         return history + [(text, card)], "", {"pending":pending}
 
@@ -343,8 +410,7 @@ def step_chat(history, user_text, state):
         if not cr_id:
             return history + [(text, "I didn’t catch the CR number. Try: `promote cr 12`.")], "", state
         plan = {"intent":"promote","cr_id":cr_id}
-        card = _plan_card("Planned Promotion",
-                          [f"Promote CR: {cr_id} to prod"], plan_yaml=yaml.safe_dump(plan, sort_keys=False))
+        card = "### Planned Promotion\\n" + f"- Promote CR: {cr_id} to prod\\n" + "\\n```yaml\\n" + yaml.safe_dump(plan, sort_keys=False) + "```\\n\\nReply **yes** to proceed."
         pending["plan"]=plan
         return history + [(text, card)], "", {"pending":pending}
 
@@ -354,33 +420,9 @@ def step_chat(history, user_text, state):
         if not cr_id:
             return history + [(text, "I didn’t catch the CR number. Try: `delete dev 12`.")], "", state
         plan = {"intent":"delete_dev","cr_id":cr_id}
-        card = _plan_card("Planned Dev Cleanup",
-                          [f"Remove Dev entry for CR: {cr_id} (registry only)"], plan_yaml=yaml.safe_dump(plan, sort_keys=False))
+        card = "### Planned Dev Cleanup\\n" + f"- Remove Dev entry for CR: {cr_id} (registry only)\\n" + "\\n```yaml\\n" + yaml.safe_dump(plan, sort_keys=False) + "```\\n\\nReply **yes** to proceed."
         pending["plan"]=plan
         return history + [(text, card)], "", {"pending":pending}
-
-    # --- Confirm execution ---
-    if re.search(r"\\b(yes|proceed|do it|go ahead)\\b", text.lower()) and state.get("pending",{}).get("plan"):
-        plan = state["pending"]["plan"]
-        if plan["intent"]=="open_cr":
-            res = _create_cr(plan["title"], dry_run=False)
-            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{}}
-        if plan["intent"]=="create_space_from_repo":
-            owner, _ = _owner_repo_from_url(AO_DEFAULT_REPO)
-            res = _execute_create_space(owner, plan)
-            try:
-                repo, base = _clone("/tmp/ao_log_exec")
-                logp = _append_logbook(base, "Create HF Space from GitHub repo", f"```json\\n{json.dumps(res, indent=2)}\\n```")
-                _commit_and_push(repo, [logp], "chore(log): create space")
-            except Exception:
-                pass
-            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{}}
-        if plan["intent"]=="promote":
-            res = _promote(plan["cr_id"])
-            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{}}
-        if plan["intent"]=="delete_dev":
-            res = _delete_dev(plan["cr_id"])
-            return history + [(text, f"✅ Executed:\\n```json\\n{json.dumps(res, indent=2)}\\n```")], "", {"pending":{}}
 
     # --- Read-only answers ---
     if intent == "show_deployments":
@@ -423,9 +465,9 @@ def step_chat(history, user_text, state):
             return history + [(text, f"I couldn’t load the logbook yet ({e}).")], "", state
 
     # --- General chat fallback ---
-    reply = ("I’m in open chat mode. Ask anything to refine ideas.\n\n"
-             "When you want action, say something like:\n"
-             "• open a change request: <title>\n"
+    reply = ("I’m in open chat mode. Share ideas, ask questions, or explore options.\n\n"
+             "When you want action, say:\n"
+             "• draft the CR  — after we’ve refined your idea\n"
              "• create a space from https://github.com/owner/repo called <name> on cpu")
     return history + [(text, reply)], "", state
 
@@ -437,7 +479,7 @@ def ui_status():
         "AO_DEFAULT_REPO": AO_DEFAULT_REPO,
         "HF_NAMESPACE": HF_NAMESPACE or "(unset)",
         "SPACE_ID": SPACE_ID or "(unset)",
-        "build": "AO v0.6.2 (Docker, always dry-run + open chat)"
+        "build": "AO v0.6.3 (Docker, conversational-first CRs)"
     }
 
 def ui_get_registry():
@@ -449,8 +491,8 @@ def ui_promote(cr_id):
 def ui_delete_dev(cr_id):
     return _delete_dev(cr_id.strip())
 
-with gr.Blocks(title="AO v0.6.2 — Open chat + Always dry-run") as demo:
-    gr.Markdown("## AO v0.6.2 — Open chat by default; actionable steps always dry‑run first.\n")
+with gr.Blocks(title="AO v0.6.3 — Conversational-first CRs") as demo:
+    gr.Markdown("## AO v0.6.3 — Conversational-first change requests; always dry‑run before execution.\n")
 
     with gr.Tab("Status"):
         env = gr.JSON()
@@ -458,10 +500,10 @@ with gr.Blocks(title="AO v0.6.2 — Open chat + Always dry-run") as demo:
 
     with gr.Tab("Jobs (conversational)"):
         chat = gr.Chatbot(height=480)
-        txt = gr.Textbox(placeholder="Try: open a change request: add a deployments tab")
+        txt = gr.Textbox(placeholder="Tell me what you want to change, or ask anything…")
         send = gr.Button("Send")
         reset = gr.Button("Reset")
-        state = gr.State({"pending":{}})
+        state = gr.State({"pending":{"mode":None}})
         demo.load(fn=reset_chat, outputs=[chat, txt, state])
         reset.click(fn=reset_chat, outputs=[chat, txt, state])
         send.click(fn=step_chat, inputs=[chat, txt, state], outputs=[chat, txt, state])
