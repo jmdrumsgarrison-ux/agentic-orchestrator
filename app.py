@@ -1,30 +1,33 @@
-import os, io, shutil, zipfile, time, re, gradio as gr
-from typing import List, Dict, Any
+import os, io, shutil, zipfile, time, gradio as gr
 
 PORT = int(os.environ.get("PORT","7860"))
 HOME = "/tmp/ao_home"; os.makedirs(HOME, exist_ok=True)
 
-BANNER = """\
-# AO v0.7.2 — Drops (semantic versioning)
+CONTEXT = """\
+# AO v0.7.3 — Drops Mode (Server-hosted)
 
-Same Drops workflow, but **no Drop numbers**. You set the semantic **version** (e.g., `v0.7.2`), and the server packages:
-- `AO_<version>.zip`
-- `DROP_NOTES.md` and `README.md` carrying the version
-- All uploaded attachments under `/assets`
+Working agreement (seeded context):
 
-Nothing executes automatically. This is the same “old way” loop, hosted in the server.
+- You = product owner/tester. You state problems or desired changes, and you provide logs/screenshots.
+- AO = developer/maintainer. I deliver each new release as a fully packaged Drop (zip).
+- Loop:
+  1. You tell me the problem/feature.
+  2. I package a new Drop (versioned zip).
+  3. You deploy it in your Space.
+  4. If errors, you send logs back.
+  5. I patch and re-drop.
+  6. Repeat until stable.
+- Strict packaging: every change is a **full zip**, branded with the version. You don’t hand-edit.
+- Communication style: concise back-and-forth, minimal explanations unless requested.
 """
-
-SEMVER_RE = re.compile(r"^v?(\\d+)\\.(\\d+)\\.(\\d+)$")
 
 def _ts(): return time.strftime("%Y-%m-%d %H:%M:%S")
 
 def _init_state():
     return {
-        "chat": [],
+        "chat": [("system", CONTEXT)],
         "attachments": [],
-        "version": "v0.7.2",
-        "proposed": False,
+        "version": "v0.7.3",
         "confirmed": False,
         "title": "",
         "summary": "",
@@ -32,7 +35,7 @@ def _init_state():
 
 def reset_all():
     st = _init_state()
-    welcome = "Drops mode (semver). Describe what you want. When aligned, say **propose a Drop**. Upload files to include. Say **yes** to build."
+    welcome = "You’re in Drops mode. Describe what you want. When aligned, say **propose a Drop**. Upload logs/screenshots if needed. Say **yes** to build."
     return [("", welcome)], "", st, st["version"], "", ""
 
 def _append(history, you=None, me=None):
@@ -44,29 +47,19 @@ def chat_step(history, user_text, st):
     msg = (user_text or "").strip()
     if not msg: return history, "", st
     lower = msg.lower()
-
-    # confirm build
-    if st.get("proposed") and any(w in lower for w in ["yes","ship it","do it","build it","go ahead","proceed"]):
+    if "yes" in lower and "propose" not in lower:
         st["confirmed"] = True
-        reply = f"Great — I’ll package **AO_{st['version']}** now. You’ll get a zip you can drop into Spaces."
+        reply = f"Okay — I’ll package **AO_{st['version']}** now when you click Build."
         return _append(history, msg, reply), "", st
-
-    # propose
-    if "propose a drop" in lower or "prepare a drop" in lower or "roll the next drop" in lower:
-        st["proposed"] = True
-        title = st["title"] or f"AO {st['version']}"
-        reply = (f"Proposing **{title}** ({st['version']}). "
-                 f"If that looks right, say **yes** to build. You can also set a title/summary first.")
+    if "propose a drop" in lower or "prepare a drop" in lower or "roll the next" in lower:
+        reply = f"Proposing **AO_{st['version']}**. If that looks right, say **yes** to confirm."
         return _append(history, msg, reply), "", st
-
-    # normal talk
-    canned = "Got it. If we’re aligned, say **propose a Drop** and I’ll stage it. Upload files anytime; they’ll be included."
+    canned = "Noted. When converged, say **propose a Drop** and then **yes** to build. Upload files anytime; they’ll be bundled."
     return _append(history, msg, canned), "", st
 
 def set_meta(version, title, summary, st):
     st = st or _init_state()
-    v = (version or "").strip()
-    if v and SEMVER_RE.match(v): st["version"] = v if v.startswith("v") else f"v{v}"
+    if version: st["version"] = version.strip()
     st["title"] = title or ""
     st["summary"] = summary or ""
     return st
@@ -96,10 +89,8 @@ def _write(history, st, outroot):
             f.write("\\n## Attachments\\n")
             for att in st["attachments"]:
                 f.write(f"- {att['name']} ({att['size']} bytes)\\n")
-
     with open(os.path.join(outroot, "README.md"), "w", encoding="utf-8") as f:
-        f.write(f"AO {st['version']} — packaged by AO.\\n\\nUnzip into your Space root.\\n")
-
+        f.write(f"AO {st['version']} — packaged Drop.\\nUnzip into your Space root.\\n")
     assets = os.path.join(outroot, "assets"); os.makedirs(assets, exist_ok=True)
     for att in st["attachments"]:
         shutil.copy2(att["path"], os.path.join(assets, att["name"]))
@@ -107,7 +98,7 @@ def _write(history, st, outroot):
 def build_zip(history, st):
     st = st or _init_state()
     if not st.get("confirmed"):
-        return None, "Say **yes** to confirm building this version."
+        return None, "Say **yes** to confirm building this Drop."
     outroot = os.path.join(HOME, "out"); shutil.rmtree(outroot, ignore_errors=True); os.makedirs(outroot, exist_ok=True)
     _write(history, st, outroot)
     safe = st["version"].replace("/", "_")
@@ -118,22 +109,20 @@ def build_zip(history, st):
                 ap = os.path.join(r, fn)
                 z.write(ap, arcname=os.path.relpath(ap, outroot))
     st["confirmed"] = False
-    st["proposed"] = False
-    return zip_path, f"Built AO_{safe}.zip. Remember to bump the version for the next Drop."
+    return zip_path, f"Built AO_{safe}.zip."
 
-with gr.Blocks(title="AO v0.7.2 — Drops (semver)") as demo:
-    gr.Markdown(BANNER)
+with gr.Blocks(title="AO v0.7.3 — Drops") as demo:
+    gr.Markdown(CONTEXT)
     with gr.Row():
         with gr.Column(scale=2):
             chat = gr.Chatbot(height=480, label="Chat")
-            user = gr.Textbox(placeholder="Say anything… e.g., 'Propose a Drop', 'Here are logs', 'Yes'")
+            user = gr.Textbox(placeholder="Talk as usual: 'Propose a Drop', 'Yes', 'Here are logs'")
             send = gr.Button("Send")
         with gr.Column(scale=1):
-            gr.Markdown("### Versioned Release")
-            version = gr.Textbox(value="v0.7.2", label="Version (semver: vX.Y.Z)")
+            version = gr.Textbox(value="v0.7.3", label="Version (semver: vX.Y.Z)")
             title = gr.Textbox(label="Title (optional)")
-            summary = gr.Textbox(lines=6, label="Summary / release notes (optional)")
-            files = gr.File(label="Upload attachments (multiple)", file_count="multiple")
+            summary = gr.Textbox(lines=6, label="Summary (optional)")
+            files = gr.File(label="Upload attachments", file_count="multiple")
             attach_status = gr.Textbox(label="Attachment status", interactive=False, value="Ready.")
             build = gr.Button("Build AO_<version>.zip")
             out_zip = gr.File(label="Download AO_<version>.zip")
@@ -142,7 +131,7 @@ with gr.Blocks(title="AO v0.7.2 — Drops (semver)") as demo:
     state = gr.State(_init_state())
 
     def _boot():
-        return [("", "Welcome to AO v0.7.2 — Drops (semver). Same workflow, now versioned.")], "", _init_state(), "v0.7.2", "", ""
+        return [("", "AO v0.7.3 Drops mode. Same loop as here.")], "", _init_state(), "v0.7.3", "", ""
     demo.load(_boot, outputs=[chat, user, state, version, title, summary])
 
     send.click(chat_step, inputs=[chat, user, state], outputs=[chat, user, state])

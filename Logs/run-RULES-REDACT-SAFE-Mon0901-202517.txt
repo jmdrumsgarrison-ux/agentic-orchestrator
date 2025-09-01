@@ -392,3 +392,14 @@ warning: in the working copy of 'app.py', LF will be replaced by CRLF the next t
 warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
 Tagged: v0.7.0
 Applying explicit version: AO_v0.7.2_semver.zip -> v0.7.2
+warning: in the working copy of '.dockerignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Logs/run-RULES-REDACT-SAFE-Mon0901-202517.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/.dockerignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
+Tagged: v0.7.2
+Applying explicit version: AO_v0.7.3_drops.zip -> v0.7.3
