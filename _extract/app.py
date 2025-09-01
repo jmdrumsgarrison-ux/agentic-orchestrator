@@ -1,146 +1,158 @@
-﻿import os
+﻿
+import os
 import time
-from typing import List, Dict, Any, Tuple
-
+from typing import List, Tuple, Any
 import gradio as gr
+from markdownify import markdownify as html_to_md
+from openai import OpenAI
 
-# Optional OpenAI usage; falls back to echo if key not present
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
-OPENAI_API_KEY = SecretStrippedByGitPush"OPENAI_API_KEY") or os.environ.get("OPENAI_APIKEY") or os.environ.get("OPENAI_KEY")
+APP_VERSION = "v0.8.3-fix-rte"
+DEFAULT_MODEL = os.environ.get("OPENAI_MODEL", "gpt-5")
+OPENAI_API_KEY = SecretStrippedByGitPush"OPENAI_API_KEY", "")
 
-try:
-    from openai import OpenAI  # >=1.0
-    _openai_ok = True
-except Exception:
-    _openai_ok = False
+def _banner_dict() -> dict:
+    return {
+        "version": APP_VERSION,
+        "model": DEFAULT_MODEL,
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
 
-BANNER = f"AO v0.8.3 — GPT: **{OPENAI_MODEL}** · Rich text input (Quill) → Markdown · File uploads · Version banner"
-
-def _call_openai(messages: List[Dict[str, str]]) -> str:
-    # If no key or SDK unavailable, gracefully echo a stub
-    if not OPENAI_API_KEY or not _openai_ok:
-        # Simple deterministic stub for offline demo
-        last_user = next((m["content"] for m in reversed(messages) if m["role"] == "user"), "")
-        return f"_demo reply:_ I received your message (as Markdown):\n\n{last_user}"
+def _chat_completion(messages: List[dict]) -> str:
+    if not OPENAI_API_KEY:
+        # No key in Spaces testing; return echo so UI still works
+        last = next((m["content"] for m in reversed(messages) if m["role"]=="user"), "")
+        return f"(demo mode) you said:\n\n{last}"
     client = OpenAI(api_key=OPENAI_API_KEY)
-    # Use Responses API (chat) if available in your environment
-    try:
-        resp = client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=messages,
-            temperature=0.2,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"OpenAI error: {e}"
-
-def start_state() -> Tuple[List[Tuple[str, str]], List[Dict[str, str]]]:
-    history = []
-    sys_prompt = (
-        "You are AO, an agentic orchestrator assistant. "
-        "You can read Markdown bullets, code blocks, and images referenced by the user. "
-        "Keep responses concise unless asked for detail."
+    resp = client.chat.completions.create(
+        model=DEFAULT_MODEL,
+        messages=messages,
+        temperature=0.2,
     )
-    messages = [{"role": "system", "content": sys_prompt}]
-    return history, messages
+    return resp.choices[0].message.content
 
-def send(md_text: str, files: List[Any], history: List[Tuple[str, str]], messages: List[Dict[str, str]]):
-    user_content = md_text or ""
-    if files:
-        # Show file names inline; in a more advanced app, you could parse images, etc.
-        names = [os.path.basename(f.name) for f in files]
-        user_content += "\n\n**Attached files:** " + ", ".join(names)
-    messages = messages + [{"role": "user", "content": user_content}]
-    assistant = _call_openai(messages)
-    history = history + [(user_content, assistant)]
-    messages = messages + [{"role": "assistant", "content": assistant}]
-    return history, messages, gr.update(value="")
+def use_editor_content(html: str, chat: List[List[str]]) -> Tuple[List[List[str]], str]:
+    """Called after the JS copies Quill HTML into this input."""
+    md = html_to_md(html or "").strip()
+    if not md:
+        return chat, ""
+    chat = chat + [[md, None]]
+    # Build OpenAI messages
+    msgs=[{"role":"system","content":"You are a helpful assistant."}]
+    for u,a in chat:
+        if u is not None:
+            msgs.append({"role":"user","content":u})
+        if a is not None:
+            msgs.append({"role":"assistant","content":a})
+    answer = _chat_completion(msgs)
+    chat[-1][1] = answer
+    return chat, ""
 
-with gr.Blocks(css="""
-#banner {padding:10px 12px; background: rgba(0,0,0,0.02); border-radius: 10px; border:1px solid #e5e7eb;}
-.quill-wrap {border:1px solid #e5e7eb; border-radius:10px; overflow:hidden;}
-#editor {min-height: 160px; background:white;}
-#toolbar {border-bottom:1px solid #e5e7eb;}
-""") as demo:
-    gr.HTML(f"<div id='banner'><strong>{BANNER}</strong></div>")
+def send_text(text: str, chat: List[List[str]]) -> Tuple[List[List[str]], str]:
+    if not text.strip():
+        return chat, ""
+    chat = chat + [[text, None]]
+    msgs=[{"role":"system","content":"You are a helpful assistant."}]
+    for u,a in chat:
+        if u is not None:
+            msgs.append({"role":"user","content":u})
+        if a is not None:
+            msgs.append({"role":"assistant","content":a})
+    answer = _chat_completion(msgs)
+    chat[-1][1] = answer
+    return chat, ""
 
-    with gr.Row():
-        with gr.Column(scale=3):
-            chat = gr.Chatbot(label="Chat", type="messages", height=520, avatar_images=(None, None))
-            files = gr.Files(label="Upload files (optional)", file_count="multiple", height=120)
-        with gr.Column(scale=2):
-            gr.Markdown("#### Rich text input\nUse toolbar for **bold**, *italics*, lists, etc. Content is converted to **Markdown** before sending.")
-            md_hidden = gr.Textbox(value="", visible=False)  # receives Markdown via JS
-            # Quill + Turndown in HTML panel
-            gr.HTML("""
+def add_upload(files: list, chat: List[List[str]]):
+    """When files are uploaded, append a note describing them so the user can reference in text."""
+    if not files:
+        return gr.update()
+    names = [getattr(f, "name", "file") for f in files]
+    note = "Uploaded: " + ", ".join(names)
+    # show note as a gray assistant line
+    chat.append([None, f"📎 {note}"])
+    return chat
+
+def reset_chat():
+    return []
+
+css = """
+#banner { font-size: 12px; opacity: .8; }
+#rte_host .ql-container { min-height: 200px; }
+#rte_host { position: relative; z-index: 2; }      /* ensure editor is on top */
+#rte_host * { pointer-events: auto; }              /* allow typing/clicking */
+"""
+
+# Quill editor and toolbar; we mount it inside gr.HTML. We also create window.quill for JS access.
+quill_html = """
 <link href="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.snow.css" rel="stylesheet">
-<div class="quill-wrap">
+<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
+<div id="rte_host">
   <div id="toolbar">
+    <span class="ql-formats">
+      <button class="ql-bold"></button>
+      <button class="ql-italic"></button>
+      <button class="ql-underline"></button>
+      <button class="ql-strike"></button>
+    </span>
+    <span class="ql-formats">
+      <button class="ql-list" value="ordered"></button>
+      <button class="ql-list" value="bullet"></button>
+      <button class="ql-indent" value="-1"></button>
+      <button class="ql-indent" value="+1"></button>
+    </span>
     <span class="ql-formats">
       <select class="ql-header">
         <option selected></option>
         <option value="1"></option>
         <option value="2"></option>
+        <option value="3"></option>
       </select>
-      <button class="ql-bold"></button>
-      <button class="ql-italic"></button>
-      <button class="ql-underline"></button>
-    </span>
-    <span class="ql-formats">
-      <button class="ql-list" value="ordered"></button>
-      <button class="ql-list" value="bullet"></button>
-      <button class="ql-blockquote"></button>
-      <button class="ql-link"></button>
     </span>
     <span class="ql-formats">
       <button class="ql-clean"></button>
     </span>
   </div>
-  <div id="editor"></div>
+  <div id="editor" style="height:220px;"></div>
 </div>
-<script src="https://cdn.jsdelivr.net/npm/quill@1.3.7/dist/quill.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/turndown@7.1.2/dist/turndown.js"></script>
 <script>
-  window._quill = new Quill('#editor', {
+  window.quill = new Quill('#editor', {
     theme: 'snow',
-    placeholder: 'Type here… use the toolbar for bullets, headings, links…',
+    readOnly: false,
     modules: { toolbar: '#toolbar' }
   });
-  window._turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced' });
 </script>
-            """)
-            to_markdown = gr.Button("Use editor content")
-            send_btn = gr.Button("Send", variant="primary")
-            gr.Markdown("Tip: Click **Use editor content** to capture current rich text → Markdown, then **Send**.")
+"""
 
-    history_state = gr.State([])       # Chat display tuples
-    messages_state = gr.State([])      # OpenAI message list
+with gr.Blocks(css=css, fill_height=True) as demo:
+    with gr.Row():
+        gr.Markdown(f"**AO {APP_VERSION} — GPT:** `{DEFAULT_MODEL}` &nbsp;&nbsp;•&nbsp;&nbsp; **Uploads** &nbsp;&nbsp;•&nbsp;&nbsp; **Version banner**", elem_id="banner")
+    with gr.Row():
+        with gr.Column(scale=6):
+            chat = gr.Chatbot(height=520, label="Chat")
+        with gr.Column(scale=4):
+            gr.Markdown("### Rich text input (Quill) → Markdown → chat")
+            editor = gr.HTML(quill_html)
+            html_buffer = gr.Textbox(visible=False)  # receive HTML via JS
+            use_btn = gr.Button("Use editor content")
+            # When clicked, we run a JS snippet that returns editor HTML; Gradio puts it into html_buffer
+            use_btn.click(
+                fn=None,
+                inputs=None,
+                outputs=html_buffer,
+                js="() => (window.quill ? window.quill.root.innerHTML : '')"
+            ).then(use_editor_content, inputs=[html_buffer, chat], outputs=[chat, html_buffer])
+            gr.Markdown("or type plain text:")
+            text = gr.Textbox(placeholder="Type here… (Shift+Enter for newline)", lines=4)
+            send = gr.Button("Send")
+            send.click(send_text, inputs=[text, chat], outputs=[chat, text])
 
-    # Initialize states
-    init = gr.Button("Reset chat")
-    init.click(start_state, None, [chat, messages_state])
+    with gr.Row():
+        uploads = gr.Files(label="Upload files (images, logs, etc.)", file_count="multiple", type="filepath")
+        uploads.change(add_upload, inputs=[uploads, chat], outputs=chat)
 
-    # Capture rich text -> Markdown into hidden box
-    to_markdown.click(
-        None,
-        js="""() => {
-          const quill = window._quill;
-          const html = quill ? quill.root.innerHTML : '';
-          const md = window._turndown ? window._turndown.turndown(html) : html;
-          return md;
-        }""",
-        outputs=md_hidden
-    )
+    with gr.Row():
+        gr.Button("Reset chat").click(fn=reset_chat, outputs=chat)
 
-    # When sending, consume md_hidden
-    send_btn.click(
-        send,
-        inputs=[md_hidden, files, chat, messages_state],
-        outputs=[chat, messages_state, md_hidden]
-    )
-
-    # On load, bootstrap states
-    demo.load(start_state, None, [chat, messages_state])
+    demo.load(fn=lambda: _banner_dict(), outputs=None)
 
 if __name__ == "__main__":
     demo.queue().launch()
