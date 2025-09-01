@@ -522,3 +522,12 @@ warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF 
 Updated tag 'v0.8.3' (was 795c0fb)
 Tagged: v0.8.3
 Applying explicit version: AO_v0.8.4_full.zip -> v0.8.4
+warning: in the working copy of 'Logs/run-RULES-REDACT-SAFE-Mon0901-202517.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
+Tagged: v0.8.4
+Applying explicit version: AO_v0.8.5.zip -> v0.8.5
