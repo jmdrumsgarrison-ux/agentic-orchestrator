@@ -1,4 +1,4 @@
-import os, gradio as gr
+import gradio as gr
 
 PORT = int(os.environ.get("PORT","7860"))
 
@@ -9,7 +9,7 @@ def on_send(chat, text):
     chat = (chat or []) + [{"role":"user","content":text}]
     return chat, ""
 
-with gr.Blocks(title="AO v0.7.5r3 — Minimal Chat") as demo:
+with gr.Blocks(title="AO v0.7.5r2 — Minimal Chat") as demo:
     chat = gr.Chatbot(type="messages", height=560)
     with gr.Row():
         msg = gr.Textbox(placeholder="Type here…", scale=9)

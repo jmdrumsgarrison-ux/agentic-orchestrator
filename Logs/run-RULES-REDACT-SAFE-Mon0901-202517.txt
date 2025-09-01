@@ -433,3 +433,12 @@ warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF 
 Updated tag 'v0.7.4' (was 485780b)
 Tagged: v0.7.4
 Applying explicit version: AO_v0.7.5r3_minimal_chat.zip -> v0.7.5
+warning: in the working copy of 'Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Logs/run-RULES-REDACT-SAFE-Mon0901-202517.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
+Tagged: v0.7.5
+Applying explicit version: AO_v0.7.5r2_minimal_chat.zip -> v0.7.5
