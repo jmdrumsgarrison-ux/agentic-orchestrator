@@ -10,6 +10,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py ./
+COPY README.md ./
 
 ENV HOME=/tmp/ao_home
 RUN mkdir -p /tmp/ao_home

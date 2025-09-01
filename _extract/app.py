@@ -23,7 +23,7 @@ def status():
         "AO_DEFAULT_REPO": AO_DEFAULT_REPO,
         "HF_NAMESPACE": HF_NAMESPACE or "(unset)",
         "JOBS_MAX_PER_DAY": JOBS_MAX_PER_DAY,
-        "build": "AO v0.5.4r2 (Docker Self‑Knowledge + Repo Search)",
+        "build": "AO v0.5.4r1 (Docker Self‑Knowledge + Repo Search)",
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -55,7 +55,7 @@ def _md_plain(md_text: str, max_chars=1200):
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text[:max_chars] + ("…" if len(text) > max_chars else "")
 
-# ---------- Friendly context ----------
+# ---------- Friendly context (same as 0.5.4) ----------
 FRIENDLY_BANNER = (
     "👋 Hi, I’m AO — that stands for Agentic Orchestrator.\n\n"
     "I’ll eventually have lots of abilities, but right now I’m focused on one big job: "
@@ -69,14 +69,16 @@ FRIENDLY_BANNER = (
     "\n**Try:**\n- what can you do right now?\n- show last job\n- create a space from https://github.com/owner/repo called aow-myspace on cpu\n"
 )
 
-# ---------- Lightweight search ----------
+# ---------- Lightweight "semantic-ish" search ----------
 STOPWORDS = set("""a an and are as at be by for from has have how i in is it its of on or that the to what when where which who why will with you your""".split())
 
 def _normalize(t): 
     return re.findall(r"[a-z0-9]+", (t or "").lower())
 
 def _score_line(tokens_q, tokens_l):
+    # simple score: term frequency with small boost for consecutive matches
     s = sum(1 for t in tokens_l if t in tokens_q and t not in STOPWORDS)
+    # phrase-ish boost
     q_str = " ".join(tokens_q)
     l_str = " ".join(tokens_l)
     if len(tokens_q) >= 2 and " ".join(tokens_q[:2]) in l_str:
@@ -98,16 +100,17 @@ def repo_search(query: str):
             score = _score_line(q_tokens, tok)
             if score <= 0: 
                 continue
+            # build a snippet around this line
             start = max(0, idx-2); end = min(len(lines), idx+3)
             snippet = "\n".join(lines[start:end])
             hits.append((score, rel, idx+1, snippet))
     hits.sort(key=lambda x: (-x[0], x[1], x[2]))
     if not hits:
         return "I didn’t find anything in my docs for that. Try rephrasing or ask directly (“what can you do right now?”, “show last job”)."
+    # format top 3
     out = []
     for score, rel, line_no, snip in hits[:3]:
-        quoted = snip.replace("\n", "\n> ")
-        out.append(f"**{rel}** — line {line_no}\n> {quoted}\n")
+        out.append(f"**{rel}** — line {line_no}\n> {snip.replace('\n','\n> ')}\n")
     return "\n".join(out)
 
 # ---------- Intents ----------
@@ -121,7 +124,7 @@ def _intent(text: str):
         return "ask_logbook"
     if any(k in t for k in ["create a space", "create an hf space", "clone into a space", "make a space", "space from repo"]):
         return "create_space"
-    return "ask_docs"
+    return "ask_docs"  # default to searching the docs
 
 def _extract_fields(text: str):
     url_m = re.search(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text or "")
@@ -136,7 +139,7 @@ def _extract_fields(text: str):
     if "cpu" in (text or "").lower(): hw = "cpu-basic"
     return {"repo_url": repo_url, "name": name, "hardware": hw}
 
-# ---------- Execution helpers (unchanged) ----------
+# ---------- Execution (kept from 0.5.4) ----------
 def _gh_headers():
     return {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
 
@@ -152,6 +155,7 @@ def _execute_create_space(owner, plan):
     if not HF_TOKEN:
         return {"error": "HF_TOKEN missing"}
 
+    # 1) Create GitHub repo (private) if not exists
     repo_name = plan["worker_repo"].split("/")[1]
     check_url = f"https://api.github.com/repos/{owner}/{repo_name}"
     r = requests.get(check_url, headers=_gh_headers(), timeout=30)
@@ -164,6 +168,7 @@ def _execute_create_space(owner, plan):
             return {"error": f"GitHub create failed: {cr.status_code} {cr.text[:200]}"}
         gh = {"created": True, "repo_url": f"https://github.com/{owner}/{repo_name}"}
 
+    # 2) Seed repo from source
     work = "/tmp/seed"
     if os.path.exists(work): shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
@@ -188,6 +193,7 @@ def _execute_create_space(owner, plan):
     except Exception as e:
         return {"error": f"Seeding failed: {e}"}
 
+    # 3) Create HF Space from repo
     ns = HF_NAMESPACE or owner
     space_id = f"{ns}/{repo_name}"
     payload = {"sdk": "docker", "private": True, "hardware": plan["hardware"], "repository": {"url": gh["repo_url"]}}
@@ -239,6 +245,7 @@ def jobs_step(history, user_text):
             lines = _read_lines(base, "ops/logbook.md")
             if not lines:
                 return history + [(user_text, "The logbook is empty so far.")], ""
+            # last section starting with "## "
             text = "\n".join(lines)
             sections = re.split(r"\n##\s+", text)
             last = sections[-1] if len(sections) > 1 else text
@@ -269,8 +276,11 @@ def jobs_step(history, user_text):
         history = history + [(user_text, "Here’s the plan (dry‑run):\n```yaml\n" + yaml.safe_dump(plan, sort_keys=False) + "```\nReply **yes** to proceed.")]
         if re.search(r"\b(yes|proceed|do it|go ahead)\b", user_text.lower()):
             result = _execute_create_space(owner, plan)
+            # write logbook entry
             try:
                 from git import Repo, Actor as A
+                # reuse AO repo, append entry
+                # use helper-like inline to avoid large code reuse
                 work = "/tmp/log_write"
                 if os.path.exists(work): shutil.rmtree(work, ignore_errors=True)
                 os.makedirs(work, exist_ok=True)
@@ -295,11 +305,12 @@ def jobs_step(history, user_text):
             return history + [("", f"✅ Executed:\n```json\n{json.dumps(result, indent=2)}\n```")], ""
         return history, ""
 
+    # default: query docs
     ans = repo_search(user_text)
     return history + [(user_text, ans)], ""
 
-with gr.Blocks(title="AO v0.5.4r2 — Self‑Knowledge + Repo Search + Action") as demo:
-    gr.Markdown("## AO v0.5.4r2 — Ask me about myself, search my docs, or ask me to create a Space from a repo.")
+with gr.Blocks(title="AO v0.5.4r1 — Self‑Knowledge + Repo Search + Action") as demo:
+    gr.Markdown("## AO v0.5.4r1 — Ask me about myself, search my docs, or ask me to create a Space from a repo.")
     with gr.Tab("Status"):
         env = gr.JSON(label="Environment")
         demo.load(status, outputs=env)
