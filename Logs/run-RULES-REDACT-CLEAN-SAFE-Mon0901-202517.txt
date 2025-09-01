@@ -2,3 +2,26 @@
 ===== AO Versioner (Rules + Redaction) [SAFE CLEAN] =====
 >>> CLEAN MODE ENABLED (remote history will be reset) <<<
 Baselining from: HF_Orchestrator_Space_Drop66.zip
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/.github/workflows/release.yml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/LICENSE', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/orchestrator.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/patches.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/repo_scanner.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/synth_dockerfile.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'workflows/release.yml', LF will be replaced by CRLF the next time Git touches it
+>>> CLEAN: resetting remote main to v0.0.0 and deleting remote tags (except v0.0.0)
+git : To https://github.com/jmdrumsgarrison-ux/agentic-orchestrator.git
+At 
+C:\Users\j\Downloads\HF_AO_Versioner_Rules_Redact_CLEAN_PREFILLED_WITHDROPS_FIXED_SAFE\build_AO_rules_redact.ps1:132 
+char:3
++   git push origin +refs/tags/v0.0.0:refs/heads/main 2>&1 | Write-Outp ...
++   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (To https://gith...rchestrator.git:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ExitCode: 1 
