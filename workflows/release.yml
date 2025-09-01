@@ -1,0 +1,21 @@
+name: Release Zip
+on:
+  push:
+    tags:
+      - 'v*'
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Create Release Zip
+        run: |
+          zip -r HF_Orchestrator_Space_${GITHUB_REF_NAME}.zip . -x "*.git*"
+          echo "ZIP=HF_Orchestrator_Space_${GITHUB_REF_NAME}.zip" >> $GITHUB_ENV
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

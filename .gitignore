@@ -1,0 +1,4 @@
+secrets/
+run_AO_rules_redact*.bat
+build_AO_rules_redact.ps1
+

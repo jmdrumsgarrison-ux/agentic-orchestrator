@@ -1,0 +1,4 @@
+AO Versioner Redaction Report (20250901-171031)
+===================================
+[REDACTED] C:\Users\j\Downloads\HF_AO_Versioner_Rules_Redact_CLEAN_PREFILLED_WITHDROPS_FIXED_SAFE\build_AO_rules_redact.ps1
+[REDACTED] C:\Users\j\Downloads\HF_AO_Versioner_Rules_Redact_CLEAN_PREFILLED_WITHDROPS_FIXED_SAFE\_extract\orchestrator.py
