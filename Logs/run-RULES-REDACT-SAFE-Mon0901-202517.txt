@@ -31,3 +31,20 @@ warning: in the working copy of '_extract/HF_Orchestrator_Drop68_Space/app/orche
 warning: in the working copy of '_extract/HF_Orchestrator_Drop68_Space/requirements.txt', LF will be replaced by CRLF the next time Git touches it
 Tagged: v0.0.2
 Applying Drop>=67: HF_Orchestrator_Drop68.zip
+warning: in the working copy of 'Logs/run-RULES-REDACT-SAFE-Mon0901-202517.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/defaults.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/orchestrator.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68/README.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68/app/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68/app/defaults.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68/app/orchestrator.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68/deploy.bat', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/HF_Orchestrator_Drop68/setup.bat', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'deploy.bat', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'setup.bat', LF will be replaced by CRLF the next time Git touches it
+Tagged: v0.0.3
+Applying Drop>=67: HF_Orchestrator_Drop69_SpaceRoot.zip
