@@ -42,7 +42,7 @@ def orchestrate(namespace, space_name, repo_url, hardware=None, private=True, re
     logs = logs if logs is not None else []
     log = _logger(logs)
 
-    log("Orchestrator starting (Drop70 TopLevel).")
+    log("Orchestrator starting (Drop71).")
     log(f"Inputs: namespace={namespace}, space={space_name}, repo={repo_url}, hardware={hardware or '(auto)'}, private={private}")
     _ensure_module("git", pip_name="gitpython", log=log)
     log("GitPython OK.")

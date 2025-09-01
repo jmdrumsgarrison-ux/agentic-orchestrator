@@ -1,12 +1,20 @@
-# HF Orchestrator — Drop70 (Top-Level Files)
+---
+title: HF Orchestrator — Drop71
+emoji: 🚀
+colorFrom: blue
+colorTo: green
+sdk: gradio
+sdk_version: "4.31.0"
+app_file: app.py
+pinned: false
+---
 
-**Contents (all in Space root):**
-- app.py
-- orchestrator.py
-- defaults.json
-- requirements.txt
+# HF Orchestrator — Drop71
 
-**Usage (on Hugging Face):**
-1. Open your Space (SDK: Gradio).
-2. Upload all files from this zip directly into the **Space root** (no subfolders).
-3. Spaces will install `requirements.txt` and run `app.py` automatically.
+This drop includes:
+- `app.py` — Gradio entrypoint
+- `orchestrator.py` — auto-repair for missing GitPython
+- `defaults.json` — GUI defaults (Namespace, Space name, Repo URL)
+- `requirements.txt`
+
+Everything is at the Space root. Hugging Face will read the metadata above automatically.
