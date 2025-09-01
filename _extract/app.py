@@ -1,100 +1,76 @@
-﻿
-import os, datetime, typing as t
-import gradio as gr
 
-APP_VERSION = "v0.8.5"
-MODEL_NAME = os.environ.get("OPENAI_MODEL", "gpt-5")  # your space can override this
-OPENAI_API_KEY = SecretStrippedByGitPush"OPENAI_API_KEY")
+import os
+import gradio as gr
 
 try:
     from openai import OpenAI
-    _openai_available = True
 except Exception:
-    _openai_available = False
+    OpenAI = None
 
-def _banner_md() -> str:
-    return (
-        f"### AO {APP_VERSION} — GPT: **{MODEL_NAME}** • Rich text input • Uploads\n"
-        f"_Start typing on the left or compose rich text on the right and click **Use editor content**, then **Send**._"
-    )
+APP_VERSION = "v0.8.6"
+MODEL_NAME = os.getenv("OPENAI_MODEL", "gpt-5").strip()
+OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 
-def _assistant_reply(messages: list[dict], files: list[str]|None) -> str:
-    """
-    Very small helper: if an API key and openai lib exist, call Chat Completions.
-    Otherwise, return a local stub reply so the UI stays responsive.
-    """
-    user_text = ""
-    for m in reversed(messages):
-        if m.get("role") == "user":
-            user_text = m.get("content","")
-            break
+BANNER = f"""
+<div style="padding:10px 12px;
+    background:linear-gradient(90deg,#4f46e5,#2563eb);
+    color:#fff;border-radius:10px;margin-bottom:10px;font-weight:600">
+  AO {APP_VERSION} — GPT-5 • Rich text • Uploads • Version banner
+</div>
+"""
 
-    # Attach a brief files note for the model (or stub) if any were uploaded.
-    files_note = ""
-    if files:
-        files_note = f"\n\n(Attached files: {', '.join(os.path.basename(p) for p in files)})"
+def _make_client():
+    if not OPENAI_KEY or OpenAI is None:
+        return None
+    try:
+        return OpenAI()
+    except Exception:
+        return None
 
-    if OPENAI_API_KEY and _openai_available:
-        try:
-            client = OpenAI(api_key=OPENAI_API_KEY)
-            completion = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=messages + [{"role":"system","content":"You are a helpful assistant in a Gradio Space."}],
-                temperature=0.4,
-            )
-            return completion.choices[0].message.content or "OK."
+def _dry_run_reply(text):
+    msg = text.strip() or "(empty message)"
+    return f"(dry-run) No OPENAI_API_KEY set. I received: “{msg}”."
 
-        except Exception as e:
-            return f"*(OpenAI call failed — returning local response. Error: {e})*\n\nYou said: {user_text}{files_note}"
-    else:
-        return f"*(Local response — no API call)*\n\nYou said: {user_text}{files_note}"
+def send_fn(history, richtext, files):
+    user_text = (richtext or "").strip()
+    if not user_text:
+        return history, gr.update(value="")
+    new_messages = history + [{"role": "user", "content": user_text}]
+    client = _make_client()
+    if client is None:
+        assistant_text = _dry_run_reply(user_text)
+        new_messages.append({"role": "assistant", "content": assistant_text})
+        return new_messages, gr.update(value="")
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=new_messages,
+            temperature=0.3,
+        )
+        assistant = resp.choices[0].message.content or ""
+        new_messages.append({"role": "assistant", "content": assistant})
+    except Exception as e:
+        new_messages.append({"role": "assistant", "content": f"(error) {e}"})
+    return new_messages, gr.update(value="")
 
-def respond(chat_history: list[dict], user_msg: str, uploads: list[gr.File]|None):
-    # append user message to messages list used by Chatbot(type='messages')
-    chat_history = chat_history or []
-    chat_history.append({"role": "user", "content": user_msg})
-
-    # collect filepaths
-    filepaths = []
-    if uploads:
-        for f in uploads:
-            # gradio passes temp file objects; we store paths only
-            try:
-                filepaths.append(getattr(f, "name", str(f)))
-            except Exception:
-                pass
-
-    assistant = _assistant_reply(chat_history, filepaths)
-    chat_history.append({"role": "assistant", "content": assistant})
-    return chat_history, None, None  # clear text & uploads
-
-with gr.Blocks(fill_height=True) as demo:
-    gr.Markdown(_banner_md())
-
-    with gr.Row(equal_height=True):
-        with gr.Column(scale=3):
-            chat = gr.Chatbot(type="messages", height=420, show_copy_button=True)
-            user_tb = gr.Textbox(label="Textbox", placeholder="Type here…", scale=1)
+with gr.Blocks(fill_height=True, theme=gr.themes.Soft()) as demo:
+    gr.HTML(BANNER)
+    with gr.Row():
         with gr.Column(scale=2):
-            gr.Markdown("#### Rich text input (converted to Markdown on send)")
-            rich = gr.RichText(placeholder="Write rich text here…", show_copy_button=True)
-            use_btn = gr.Button("Use editor content", variant="secondary")
-            uploads = gr.File(label="Upload files (optional)", file_count="multiple")
-            send_btn = gr.Button("Send", variant="primary")
-
-    # wire
-    use_btn.click(lambda s: s, inputs=rich, outputs=user_tb)
-    send_btn.click(
-        respond,
-        inputs=[chat, user_tb, uploads],
-        outputs=[chat, user_tb, uploads],
-    )
-    user_tb.submit(
-        respond,
-        inputs=[chat, user_tb, uploads],
-        outputs=[chat, user_tb, uploads],
-    )
+            chat = gr.Chatbot(label="AO Chat", type="messages", height=520)
+        with gr.Column(scale=1):
+            gr.Markdown("**Rich text input**")
+            editor = gr.RichText(
+                placeholder="Write here… bullets, bold, links, etc.",
+                show_copy_button=True,
+            )
+            send = gr.Button("Send", variant="primary")
+            uploads = gr.File(file_count="multiple", label="Attach files")
+            gr.Markdown(
+                f"**Model:** `{MODEL_NAME}` | (Set OPENAI_MODEL / OPENAI_API_KEY)"
+            )
+    state = gr.State([])
+    send.click(send_fn, inputs=[state, editor, uploads], outputs=[chat, editor])        .then(lambda h: h, inputs=chat, outputs=state)
 
 if __name__ == "__main__":
     demo.queue().launch()
-
