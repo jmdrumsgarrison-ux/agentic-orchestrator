@@ -10,45 +10,35 @@ AO_DEFAULT_REPO = os.environ.get("AO_DEFAULT_REPO", "").strip()
 
 # --- Auto-detect HF namespace from SPACE_ID if not explicitly set ---
 HF_NAMESPACE = os.environ.get("HF_NAMESPACE", "").strip()
-SPACE_ID = os.environ.get("SPACE_ID", "").strip()  # e.g., "JmDrumsGarrison/AgentiveOrchestrator"
-HF_NAMESPACE_SRC = "env"
+SPACE_ID = os.environ.get("SPACE_ID", "").strip()  # e.g., "user/space"
 if not HF_NAMESPACE and SPACE_ID and ("/" in SPACE_ID):
     HF_NAMESPACE = SPACE_ID.split("/")[0]
-    HF_NAMESPACE_SRC = "SPACE_ID (auto)"
-elif HF_NAMESPACE:
-    HF_NAMESPACE_SRC = "HF_NAMESPACE (explicit)"
-else:
-    HF_NAMESPACE_SRC = "(unset)"
 
 PORT = int(os.environ.get("PORT", "7860"))
 
 FRIENDLY = (
     "👋 Hi, I’m AO — Agentic Orchestrator.\n\n"
-    "Right now I specialize in **turning public GitHub repos into Hugging Face Spaces**.\n"
+    "I can ❶ turn public GitHub repos into Hugging Face Spaces, and ❷ manage **Change Requests** (dev→prod).\n"
     "I always show a dry‑run plan and only execute after you confirm.\n\n"
     "Try:\n"
-    "- what can you do right now?\n"
+    "- open a change request: add a deployments tab\n"
     "- show last job\n"
     "- create a space from https://github.com/owner/repo called aow-myspace on cpu\n"
 )
 
-def status():
-    return {
-        "GITHUB_TOKEN_present": bool(GITHUB_TOKEN),
-        "HF_TOKEN_present": bool(HF_TOKEN),
-        "AO_DEFAULT_REPO": AO_DEFAULT_REPO,
-        "HF_NAMESPACE": HF_NAMESPACE or "(unset)",
-        "HF_NAMESPACE_source": HF_NAMESPACE_SRC,
-        "SPACE_ID": SPACE_ID or "(unset)",
-        "build": "AO v0.6.0 (Docker, auto-detect namespace)"
-    }
-
+# ---------- Utilities ----------
 def _owner_repo_from_url(url: str):
     m = re.match(r"https?://github.com/([^/]+)/([^/]+?)(?:\.git)?/?$", (url or "").strip())
     if not m: return None, None
     return m.group(1), m.group(2)
 
-# ---------- Repo IO helpers ----------
+def _gh_headers():
+    return {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+
+def _hf_headers():
+    return {"Authorization": f"Bearer {HF_TOKEN}"}
+
+# Git clone of AO repo
 def _clone(work):
     from git import Repo
     if os.path.exists(work): shutil.rmtree(work, ignore_errors=True)
@@ -64,23 +54,79 @@ def _read(base, rel):
     with open(p, "r", encoding="utf-8", errors="ignore") as f:
         return f.read()
 
-def _append_logbook(title, plan, result):
-    from git import Repo, Actor as A
-    repo, base = _clone("/tmp/log_write")
+def _load_registry(base):
+    ops = os.path.join(base, "ops"); os.makedirs(ops, exist_ok=True)
+    rp = os.path.join(ops, "registry.json")
+    if os.path.exists(rp):
+        with open(rp, "r", encoding="utf-8") as f: return json.load(f)
+    reg = {"prod": {}, "dev_spaces": [], "history": []}
+    with open(rp, "w", encoding="utf-8") as f: json.dump(reg, f, indent=2)
+    return reg
+
+def _save_registry(base, reg):
+    rp = os.path.join(base, "ops", "registry.json")
+    with open(rp, "w", encoding="utf-8") as f: json.dump(reg, f, indent=2)
+
+def _append_logbook(base, title, body):
+    from git import Actor as A
     ops = os.path.join(base, "ops"); os.makedirs(ops, exist_ok=True)
     logp = os.path.join(ops, "logbook.md")
     ts = time.strftime("%Y-%m-%d %H:%M:%S")
-    entry = f"\n## {ts} — {title}\n\n**Plan**\n```yaml\n{yaml.safe_dump(plan, sort_keys=False)}\n```\n**Result**\n```json\n{json.dumps(result, indent=2)}\n```\n"
+    entry = f"\n## {ts} — {title}\n\n{body}\n"
     mode = "a" if os.path.exists(logp) else "w"
     with open(logp, mode, encoding="utf-8") as f:
         if mode == "w": f.write("# AO Logbook\n")
         f.write(entry)
-    repo.git.add([logp])
+    return logp
+
+def _commit_and_push(repo, paths, msg):
+    from git import Actor as A
     author = A("AO Bot", "ao@example.com")
-    repo.index.commit(f"chore(log): {title}", author=author, committer=author)
+    repo.git.add(paths)
+    repo.index.commit(msg, author=author, committer=author)
     repo.remotes.origin.push()
 
-# ---------- Parsing / intents ----------
+# ---------- Space creation (seeded repo) ----------
+def _seed_new_repo_and_space(dev_repo_name, source_url):
+    import requests
+    # create GH repo under the authenticating user
+    cr = requests.post("https://api.github.com/user/repos", headers=_gh_headers(),
+                       json={"name": dev_repo_name, "private": True, "auto_init": False}, timeout=30)
+    if cr.status_code >= 300 and cr.status_code != 422:  # 422 if exists
+        return {"error": f"GitHub create failed: {cr.status_code} {cr.text[:200]}"}
+    gh_url = f"https://github.com/{_gh_whoami()}/{dev_repo_name}"
+    # seed
+    from git import Repo
+    work = "/tmp/seed_dev"
+    if os.path.exists(work): shutil.rmtree(work, ignore_errors=True)
+    os.makedirs(work, exist_ok=True)
+    src = Repo.clone_from(source_url, os.path.join(work, "src"), depth=1)
+    dst = Repo.clone_from(gh_url.replace('https://', f'https://{GITHUB_TOKEN}@'), os.path.join(work, "dst"))
+    for r,d,files in os.walk(os.path.join(work, "src")):
+        if ".git" in r: continue
+        rel = os.path.relpath(r, os.path.join(work, "src"))
+        td = os.path.join(os.path.join(work, "dst"), rel); os.makedirs(td, exist_ok=True)
+        for f in files:
+            import shutil as sh; sh.copy2(os.path.join(r,f), os.path.join(td,f))
+    dst.git.add(all=True)
+    if dst.is_dirty():
+        dst.index.commit("chore(seed): create dev repo from AO_DEFAULT_REPO")
+        dst.remotes.origin.push()
+    # create HF Space
+    sp_id = f"{HF_NAMESPACE}/{dev_repo_name}"
+    payload = {"sdk": "docker", "private": True, "hardware": "cpu-basic", "repository": {"url": gh_url}}
+    sr = requests.post(f"https://huggingface.co/api/spaces/{sp_id}", headers=_hf_headers(), json=payload, timeout=60)
+    if sr.status_code not in (200,201):
+        return {"github_repo": gh_url, "error": f"HF space create failed: {sr.status_code} {sr.text[:200]}"}
+    return {"github_repo": gh_url, "space_id": sp_id}
+
+def _gh_whoami():
+    import requests
+    me = requests.get("https://api.github.com/user", headers=_gh_headers(), timeout=30)
+    if me.status_code==200: return me.json().get("login","unknown")
+    return "unknown"
+
+# ---------- Conversational intents ----------
 def _extract_fields(text: str):
     text = text or ""
     url_m = re.search(r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", text)
@@ -98,7 +144,11 @@ def _extract_fields(text: str):
 
 def _intent(text: str):
     t = (text or "").lower()
-    if any(k in t for k in ["log", "logs", "logbook", "last job", "history", "what happened today", "recent job"]):
+    if any(k in t for k in ["open a change request", "create change request", "new change request", "open cr"]):
+        return "open_cr"
+    if any(k in t for k in ["list deployments", "show deployments", "deployments", "show change requests"]):
+        return "show_deployments"
+    if any(k in t for k in ["log", "logs", "logbook", "last job", "recent job"]):
         return "ask_logbook"
     if any(k in t for k in ["what can you do", "capabilities", "help"]):
         return "ask_context"
@@ -110,20 +160,78 @@ def _intent(text: str):
         return "create_space"
     return "chat"
 
-# ---------- Execution ----------
-def _gh_headers():
-    return {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+# ---------- Actions ----------
+def _create_cr(title, dry_run=True):
+    if not AO_DEFAULT_REPO or not GITHUB_TOKEN or not HF_TOKEN:
+        return {"error": "Missing AO_DEFAULT_REPO or tokens"}
+    repo, base = _clone("/tmp/ao_cr")
+    reg = _load_registry(base)
+    next_id = 1 + max([int(x.get("cr_id","0")) for x in reg.get("dev_spaces",[])] + [int(reg.get("prod",{}).get("cr_id","0") or 0)])
+    cr_id = f"{next_id:04d}"
+    dev_repo_name = f"AgentiveOrchestrator-dev-{cr_id}"
+    cr_yaml_path = os.path.join(base, "ops", "change_requests"); os.makedirs(cr_yaml_path, exist_ok=True)
+    cr_file = os.path.join(cr_yaml_path, f"cr-{cr_id}.yaml")
+    cr_yaml = {
+        "cr_id": cr_id,
+        "title": title,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "dev_repo": dev_repo_name,
+        "dev_space": f"{HF_NAMESPACE}/{dev_repo_name}",
+        "status": "open"
+    }
+    if dry_run:
+        return {"dry_run": True, "cr": cr_yaml}
+    # Write CR file, commit
+    with open(cr_file, "w", encoding="utf-8") as f: yaml.safe_dump(cr_yaml, f, sort_keys=False)
+    logp = _append_logbook(base, f"Open CR {cr_id}", f"Title: {title}")
+    _commit_and_push(repo, [cr_file, logp], f"chore(cr): open CR {cr_id}")
+    # Seed new repo + space
+    res = _seed_new_repo_and_space(dev_repo_name, AO_DEFAULT_REPO)
+    if "error" in res:
+        return {"cr": cr_yaml, "error": res["error"]}
+    # Update registry
+    reg["dev_spaces"].append({
+        "cr_id": cr_id, "space": res["space_id"], "repo": res["github_repo"],
+        "status": "running", "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    })
+    _save_registry(base, reg)
+    _commit_and_push(repo, [os.path.join(base,"ops","registry.json")], f"chore(registry): add dev space for CR {cr_id}")
+    return {"cr": cr_yaml, "dev": res}
 
-def _hf_headers():
-    return {"Authorization": f"Bearer {HF_TOKEN}"}
+def _promote(cr_id):
+    repo, base = _clone("/tmp/ao_promote")
+    reg = _load_registry(base)
+    entry = next((d for d in reg["dev_spaces"] if d["cr_id"]==cr_id), None)
+    if not entry: return {"error": f"CR {cr_id} not found in dev_spaces"}
+    prev = reg.get("prod",{})
+    reg["history"].append(prev)
+    reg["prod"] = {"space": entry["space"], "commit": "(n/a)", "promoted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"), "cr_id": cr_id}
+    _save_registry(base, reg)
+    _commit_and_push(repo, [os.path.join(base,"ops","registry.json")], f"chore(promote): CR {cr_id} -> prod")
+    return {"promoted_to": reg["prod"]}
 
+def _delete_dev(cr_id):
+    # Only cleans up registry; manual deletion of HF Space is safer for now.
+    repo, base = _clone("/tmp/ao_deldev")
+    reg = _load_registry(base)
+    reg["dev_spaces"] = [d for d in reg["dev_spaces"] if d["cr_id"]!=cr_id]
+    _save_registry(base, reg)
+    _commit_and_push(repo, [os.path.join(base,"ops","registry.json")], f"chore(clean): remove dev entry for CR {cr_id}")
+    return {"deleted_dev_for": cr_id}
+
+def _get_registry_view():
+    repo, base = _clone("/tmp/ao_view")
+    reg = _load_registry(base)
+    return reg
+
+# ---------- Create Space from public repo (existing path) ----------
 def _execute_create_space(owner, plan):
     import requests
     from git import Repo
     if not GITHUB_TOKEN: return {"error": "GITHUB_TOKEN missing"}
     if not HF_TOKEN: return {"error": "HF_TOKEN missing"}
 
-    # 1) Create GH repo (if needed)
+    # 1) Create GH repo
     repo_name = plan["worker_repo"].split("/")[1]
     check = requests.get(f"https://api.github.com/repos/{owner}/{repo_name}", headers=_gh_headers(), timeout=30)
     if check.status_code == 200:
@@ -135,27 +243,23 @@ def _execute_create_space(owner, plan):
             return {"error": f"GitHub create failed: {cr.status_code} {cr.text[:200]}"}
         gh = {"created": True, "repo_url": f"https://github.com/{owner}/{repo_name}"}
 
-    # 2) Seed from source
-    work = "/tmp/seed"; 
+    # 2) Seed
+    work = "/tmp/seed"
     if os.path.exists(work): shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work, exist_ok=True)
-    try:
-        src = Repo.clone_from(plan["repo_url"], os.path.join(work, "src"), depth=1)
-        dst_auth = gh["repo_url"].replace("https://", f"https://{GITHUB_TOKEN}@")
-        dst = Repo.clone_from(dst_auth, os.path.join(work, "dst"))
-        for r,d,files in os.walk(os.path.join(work, "src")):
-            if ".git" in r: continue
-            rel = os.path.relpath(r, os.path.join(work, "src"))
-            td = os.path.join(os.path.join(work, "dst"), rel); os.makedirs(td, exist_ok=True)
-            for f in files:
-                import shutil as sh; sh.copy2(os.path.join(r,f), os.path.join(td,f))
-        dst.git.add(all=True)
-        if dst.is_dirty():
-            dst.index.commit("chore(seed): import from source repo")
-            dst.remotes.origin.push()
-        seed = {"seeded": True}
-    except Exception as e:
-        return {"error": f"Seeding failed: {e}"}
+    src = Repo.clone_from(plan["repo_url"], os.path.join(work, "src"), depth=1)
+    dst = Repo.clone_from(gh["repo_url"].replace("https://", f"https://{GITHUB_TOKEN}@"), os.path.join(work, "dst"))
+    for r,d,files in os.walk(os.path.join(work, "src")):
+        if ".git" in r: continue
+        rel = os.path.relpath(r, os.path.join(work, "src"))
+        td = os.path.join(os.path.join(work, "dst"), rel); os.makedirs(td, exist_ok=True)
+        for f in files:
+            import shutil as sh; sh.copy2(os.path.join(r,f), os.path.join(td,f))
+    dst.git.add(all=True)
+    if dst.is_dirty():
+        dst.index.commit("chore(seed): import from source repo")
+        dst.remotes.origin.push()
+    seed = {"seeded": True}
 
     # 3) Create HF Space
     ns = HF_NAMESPACE or owner
@@ -181,6 +285,24 @@ def step_chat(history, user_text, state):
         return history + [("","")], "", state
 
     intent = _intent(text)
+
+    if intent == "open_cr":
+        # extract a short title from the message
+        title = re.sub(r"open (a )?change request[:]?\s*", "", text, flags=re.I).strip()
+        if not title: title = "Unspecified change"
+        plan = {"intent":"open_cr","title":title}
+        history = history + [(text, "Here’s the plan (dry‑run):\n```yaml\n" + yaml.safe_dump(plan, sort_keys=False) + "```\nReply **yes** to proceed.")]
+        pending["plan"]=plan
+        return history, "", {"pending":pending}
+
+    if re.search(r"\b(yes|proceed|do it|go ahead)\b", text.lower()) and state.get("pending",{}).get("plan",{}).get("intent")=="open_cr":
+        plan = state["pending"]["plan"]
+        res = _create_cr(plan["title"], dry_run=False)
+        return history + [(text, f"✅ Opened CR:\n```json\n{json.dumps(res, indent=2)}\n```")], "", {"pending":{}}
+
+    if intent == "show_deployments":
+        reg = _get_registry_view()
+        return history + [(text, "Deployments:\n```json\n" + json.dumps(reg, indent=2) + "\n```")], "", state
 
     # Read-only answers
     if intent == "ask_context":
@@ -238,31 +360,49 @@ def step_chat(history, user_text, state):
         history = history + [(text, "Here’s the plan (dry‑run):\n```yaml\n" + yaml.safe_dump(plan, sort_keys=False) + "```\nReply **yes** to proceed.")]
         if re.search(r"\b(yes|proceed|do it|go ahead)\b", text.lower()):
             result = _execute_create_space(owner, plan)
-            try: _append_logbook("Create HF Space from GitHub repo", plan, result)
-            except Exception: pass
+            try:
+                repo, base = _clone("/tmp/ao_log_exec")
+                logp = _append_logbook(base, "Create HF Space from GitHub repo", f"```json\n{json.dumps(result, indent=2)}\n```")
+                _commit_and_push(repo, [logp], "chore(log): create space")
+            except Exception:
+                pass
             return history + [("", f"✅ Executed:\n```json\n{json.dumps(result, indent=2)}\n```")], "", {"pending":{}}
         pending["plan"]=plan
         return history, "", {"pending":pending}
 
-    if re.search(r"\b(yes|proceed|do it|go ahead)\b", text.lower()) and state.get("pending",{}).get("plan"):
-        plan = state["pending"]["plan"]
-        owner, _ = _owner_repo_from_url(AO_DEFAULT_REPO)
-        result = _execute_create_space(owner, plan)
-        try: _append_logbook("Create HF Space from GitHub repo", plan, result)
-        except Exception: pass
-        return history + [(text, f"✅ Executed:\n```json\n{json.dumps(result, indent=2)}\n```")], "", {"pending":{}}
+    return history + [(text, "I can chat broadly, but my specialty today is turning a public GitHub repo into a Hugging Face Space and opening Change Requests.\n"
+                              "Say: `open a change request: <your title>` or give me a repo URL + name to create a Space.")], "", state
 
-    return history + [(text, "I can chat broadly, but my specialty today is turning a public GitHub repo into a Hugging Face Space. "
-                              "Tell me the repo URL and a name (e.g., `name: aow-myspace`), and I’ll take it from there.")], "", state
+# ---------- UI ----------
+def ui_status():
+    return {
+        "GITHUB_TOKEN_present": bool(GITHUB_TOKEN),
+        "HF_TOKEN_present": bool(HF_TOKEN),
+        "AO_DEFAULT_REPO": AO_DEFAULT_REPO,
+        "HF_NAMESPACE": HF_NAMESPACE or "(unset)",
+        "SPACE_ID": SPACE_ID or "(unset)",
+        "build": "AO v0.6.1 (Docker, CRs + Deployments)"
+    }
 
-with gr.Blocks(title="AO v0.6.0 — auto-detect namespace") as demo:
-    gr.Markdown("## AO v0.6.0 — Conversational Space builder (auto‑detects HF namespace)\n")
+def ui_get_registry():
+    return _get_registry_view()
+
+def ui_promote(cr_id):
+    return _promote(cr_id.strip())
+
+def ui_delete_dev(cr_id):
+    return _delete_dev(cr_id.strip())
+
+with gr.Blocks(title="AO v0.6.1 — CRs + Deployments") as demo:
+    gr.Markdown("## AO v0.6.1 — Conversational builder + Change Requests / Deployments\n")
+
     with gr.Tab("Status"):
         env = gr.JSON()
-        demo.load(status, outputs=env)
+        demo.load(ui_status, outputs=env)
+
     with gr.Tab("Jobs (conversational)"):
         chat = gr.Chatbot(height=480)
-        txt = gr.Textbox(placeholder="Try: create a space from https://github.com/owner/repo called aow-myspace on cpu")
+        txt = gr.Textbox(placeholder="Try: open a change request: add a deployments tab")
         send = gr.Button("Send")
         reset = gr.Button("Reset")
         state = gr.State({"pending":{}})
@@ -270,6 +410,18 @@ with gr.Blocks(title="AO v0.6.0 — auto-detect namespace") as demo:
         reset.click(fn=reset_chat, outputs=[chat, txt, state])
         send.click(fn=step_chat, inputs=[chat, txt, state], outputs=[chat, txt, state])
         txt.submit(fn=step_chat, inputs=[chat, txt, state], outputs=[chat, txt, state])
+
+    with gr.Tab("Deployments"):
+        gr.Markdown("### Current Registry")
+        reg = gr.JSON(label="registry.json")
+        refresh = gr.Button("Refresh")
+        with gr.Row():
+            cr_id_input = gr.Textbox(label="CR ID", placeholder="e.g., 0001", scale=1)
+            promote_btn = gr.Button("Promote to Prod", scale=1)
+            delete_btn = gr.Button("Delete Dev (registry only)", scale=1)
+        refresh.click(ui_get_registry, outputs=reg)
+        promote_btn.click(ui_promote, inputs=cr_id_input, outputs=reg)
+        delete_btn.click(ui_delete_dev, inputs=cr_id_input, outputs=reg)
 
 if __name__ == "__main__":
     demo.queue().launch(server_name="0.0.0.0", server_port=PORT, show_error=True)
