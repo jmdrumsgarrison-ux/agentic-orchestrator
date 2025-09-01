@@ -452,3 +452,13 @@ warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF 
 Updated tag 'v0.7.5' (was 509b5bf)
 Tagged: v0.7.5
 Applying explicit version: AO_v0.7.5_vanilla_chat.zip -> v0.7.5
+warning: in the working copy of 'Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'Logs/run-RULES-REDACT-SAFE-Mon0901-202517.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/Dockerfile', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '_extract/requirements.txt', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'requirements.txt', LF will be replaced by CRLF the next time Git touches it
+Updated tag 'v0.7.5' (was 1bed491)
+Tagged: v0.7.5
+Applying explicit version: AO_v0.7.6_minimal_openai_chat.zip -> v0.7.6
