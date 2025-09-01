@@ -42,11 +42,10 @@ def orchestrate(namespace, space_name, repo_url, hardware=None, private=True, re
     logs = logs if logs is not None else []
     log = _logger(logs)
 
-    log("Orchestrator starting (Drop69 SpaceRoot).")
+    log("Orchestrator starting (Drop70 TopLevel).")
     log(f"Inputs: namespace={namespace}, space={space_name}, repo={repo_url}, hardware={hardware or '(auto)'}, private={private}")
     _ensure_module("git", pip_name="gitpython", log=log)
     log("GitPython OK.")
-    # Real orchestrate logic would continue here...
     log("DONE")
     return "\n".join(logs)
 

@@ -9,8 +9,8 @@ def run(namespace, space_name, repo_url, hardware, private):
 def run_sync():
     return manual_github_sync()
 
-with gr.Blocks(title="HF Orchestrator — Drop69 SpaceRoot") as demo:
-    gr.Markdown("### HF Orchestrator — Drop69 (Space Edition, root files)\nSelf-heals missing GitPython at runtime.\n\n_This build expects files in the Space root (no `/app` folder)._")
+with gr.Blocks(title="HF Orchestrator — Drop70 TopLevel") as demo:
+    gr.Markdown("### HF Orchestrator — Drop70 (Top-Level Files)\nSelf-heals missing GitPython at runtime.\n\n_All files are at the top level of the Space._")
 
     with gr.Row():
         ns = gr.Textbox(label="Namespace", value=d.get("namespace",""))
