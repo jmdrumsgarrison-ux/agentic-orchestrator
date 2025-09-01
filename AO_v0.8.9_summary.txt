@@ -1,0 +1,2 @@
+AO v0.8.9 — Single-lineage (AO). Rich editor (Quill) + uploads + GPT‑5 wiring + version banner.
+Env: OPENAI_API_KEY (optional), OPENAI_MODEL (default gpt‑5).
