@@ -11,7 +11,7 @@ def status():
         "GITHUB_TOKEN_present": bool(GITHUB_TOKEN),
         "python": sys.version.split()[0],
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "build": "AO v0.1.0 (Docker)"
+        "build": "AO v0.1.1 (Docker)"
     }
 
 def ask_chatgpt(question, context=""):
@@ -32,20 +32,39 @@ def ask_chatgpt(question, context=""):
             headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
             json=payload, timeout=60
         )
+        if r.status_code == 429:
+            # clearer message
+            try:
+                detail = r.json()
+            except Exception:
+                detail = {"error": r.text[:400]}
+            return "[openai error] 429 insufficient_quota — your API key's plan/quota is exhausted.\nDetails:\n" + json.dumps(detail, indent=2)
         if r.status_code != 200:
             return f"[openai error] {r.status_code} {r.text}"
         return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
         return f"[exception] {e}"
 
-WORKDIR = "repo_ro"
+# Writable path for HF Docker Spaces
+WORKDIR = "/data/repo_ro"
 
 def git_read(repo_url):
-    from git import Repo
-    os.makedirs(WORKDIR, exist_ok=True)
+    # make sure base dir exists
+    try:
+        os.makedirs(WORKDIR, exist_ok=True)
+    except Exception as e:
+        return json.dumps({"error": f"Failed to create workdir {WORKDIR}: {e}"}, indent=2)
+
+    try:
+        from git import Repo
+    except Exception as e:
+        return json.dumps({"error": f"GitPython import failed: {e}"}, indent=2)
+
     local = os.path.join(WORKDIR, "repo")
     info = {"repo_url": repo_url, "action": "", "error": None}
     try:
+        if not repo_url or not repo_url.startswith("http"):
+            raise ValueError("Please enter a full https repo URL, e.g. https://github.com/owner/repo")
         if os.path.exists(os.path.join(local, ".git")):
             repo = Repo(local)
             info["action"] = "fetch"
@@ -72,8 +91,8 @@ def git_read(repo_url):
         info["error"] = str(e)
         return json.dumps(info, indent=2)
 
-with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.0 — Docker") as demo:
-    gr.Markdown("## AO v0.1.0 — Docker\nGUI + ChatGPT + Read-only Git")
+with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.1 — Docker") as demo:
+    gr.Markdown("## AO v0.1.1 — Docker\nGUI + ChatGPT + Read-only Git (writes to /data)")
 
     with gr.Tab("Status"):
         btn_stat = gr.Button("Check Status")
@@ -96,3 +115,4 @@ with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.0 — Docker") as demo:
 
 if __name__ == "__main__":
     demo.queue().launch(server_name="0.0.0.0", server_port=PORT, show_error=True)
+

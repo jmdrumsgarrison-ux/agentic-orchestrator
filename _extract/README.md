@@ -1,22 +1,23 @@
-# Agentic Orchestrator (AO) v0.1.0 — Docker
+﻿---
+title: Agentic Orchestrator (AO)
+emoji: 🧠
+colorFrom: green
+colorTo: blue
+sdk: docker
+sdk_version: "1"
+app_file: app.py
+pinned: false
+---
 
-This package runs AO (GUI + Ask ChatGPT + Read-only Git) inside a Docker container.
+# AO v0.1.1 — Docker
 
-## Features
-- **GUI** (Gradio) with tabs: Status, Ask ChatGPT, Git (read-only)
-- **Ask ChatGPT** using `OPENAI_API_KEY`
-- **Read-only Git** using `gitpython`; supports private repos if `GITHUB_TOKEN` is provided
+Fixes:
+- **PermissionError** when cloning: use **/data** for writable storage (`/data/repo_ro`).
+- Clearer error messages in Git tab.
+- Friendlier message for OpenAI 429 (quota).
 
-## Hugging Face Space (Docker SDK) Notes
-- Build with this `Dockerfile`.
-- The app listens on `0.0.0.0:$PORT` (Hugging Face injects `$PORT`). 
-- Add secrets in Space settings → Variables and secrets:
-  - `OPENAI_API_KEY` (required)
-  - `GITHUB_TOKEN` (optional; for private repo reads)
+Secrets:
+SecretStrippedByGitPush
+- `GITHUB_TOKEN` (optional, for private repos)
 
-## Local Run (optional)
-```bash
-docker build -t ao:0.1.0 .
-docker run -p 7860:7860 -e OPENAI_API_KEY=sk-... -e GITHUB_TOKEN=ghp_... ao:0.1.0
-# then open http://localhost:7860
-```
+
