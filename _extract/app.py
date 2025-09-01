@@ -4,6 +4,9 @@ import gradio as gr
 OPENAI_API_KEY = SecretStrippedByGitPush"OPENAI_API_KEY", "")
 GITHUB_TOKEN = SecretStrippedByGitPush"GITHUB_TOKEN", "")
 ALLOWLIST_REPOS = [s.strip() for s in os.environ.get("ALLOWLIST_REPOS","").split(",") if s.strip()]
+AO_DEFAULT_REPO = os.environ.get("AO_DEFAULT_REPO", "").strip()
+AO_AUTO_COMMIT = os.environ.get("AO_AUTO_COMMIT", "true").lower() != "false"
+LAST_CACHE = "/tmp/ao_last_repo.json"
 PORT = int(os.environ.get("PORT", "7860"))
 
 def status():
@@ -11,232 +14,210 @@ def status():
         "OPENAI_API_KEY_present": bool(OPENAI_API_KEY),
         "GITHUB_TOKEN_present": bool(GITHUB_TOKEN),
         "ALLOWLIST_REPOS": ALLOWLIST_REPOS,
+        "AO_DEFAULT_REPO": AO_DEFAULT_REPO,
+        "AO_AUTO_COMMIT": AO_AUTO_COMMIT,
         "python": sys.version.split()[0],
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "build": "AO v0.3.0 (Docker)"
+        "build": "AO v0.3.1 (Docker Opinionated)"
     }
 
-def ask_chatgpt(question, context=""):
-    if not OPENAI_API_KEY:
-        return "[error] OPENAI_API_KEY not set in this container."
-    import requests
-    payload = {
-        "model": "gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": "You are a concise engineering assistant. Answer clearly with concrete next steps when applicable."},
-            {"role": "user", "content": f"Context:\n{context.strip()[:4000]}\n\nQuestion:\n{question}"}
-        ],
-        "temperature": 0.2,
-    }
-    try:
-        r = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {OPENAI_API_KEY}"},
-            json=payload, timeout=60
-        )
-        if r.status_code == 429:
-            try:
-                detail = r.json()
-            except Exception:
-                detail = {"error": r.text[:400]}
-            return "[openai error] 429 insufficient_quota — your API key's plan/quota is exhausted.\nDetails:\n" + json.dumps(detail, indent=2)
-        if r.status_code != 200:
-            return f"[openai error] {r.status_code} {r.text}"
-        return r.json()["choices"][0]["message"]["content"]
-    except Exception as e:
-        return f"[exception] {e}"
-
-# ---------- Read-only Git ----------
-RO_WORKDIR = "/tmp/repo_ro"
-
-def git_read(repo_url):
-    try:
-        os.makedirs(RO_WORKDIR, exist_ok=True)
-    except Exception as e:
-        return json.dumps({"error": f"Failed to create workdir {RO_WORKDIR}: {e}"}, indent=2)
-    try:
-        from git import Repo
-    except Exception as e:
-        return json.dumps({"error": f"GitPython import failed: {e}"}, indent=2)
-
-    local = os.path.join(RO_WORKDIR, "repo")
-    info = {"repo_url": repo_url, "workdir": RO_WORKDIR, "action": "", "error": None}
-    try:
-        if not repo_url or not repo_url.startswith("http"):
-            raise ValueError("Please enter a full https repo URL, e.g. https://github.com/owner/repo")
-        if os.path.exists(os.path.join(local, ".git")):
-            repo = Repo(local)
-            info["action"] = "fetch"
-            repo.git.fetch("--depth=1", "origin")
-            repo.git.checkout("FETCH_HEAD")
-        else:
-            src = repo_url.strip()
-            if GITHUB_TOKEN and src.startswith("https://github.com/"):
-                src = src.replace("https://", f"https://{GITHUB_TOKEN}@")
-            info["action"] = "clone"
-            repo = Repo.clone_from(src, local, depth=1)
-        head = repo.head.commit
-        info["head"] = {"sha": head.hexsha, "message": head.message.strip(), "author": str(head.author), "date": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(head.committed_date))}
-        try:
-            info["branches"] = [h.name for h in repo.remotes.origin.refs][:10]
-        except Exception:
-            info["branches"] = []
-        commits = []
-        for c in repo.iter_commits(max_count=5):
-            commits.append({"sha": c.hexsha, "msg": c.message.strip().splitlines()[0], "author": str(c.author), "date": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(c.committed_date))})
-        info["recent_commits"] = commits
-        return json.dumps(info, indent=2)
-    except Exception as e:
-        info["error"] = str(e)
-        return json.dumps(info, indent=2)
-
-# ---------- Save Progress to Git (with empty-repo bootstrap) ----------
-RW_WORKDIR = "/tmp/repo_rw"
-
+# ---------- Helpers ----------
 def _owner_repo_from_url(url: str):
     m = re.match(r"https?://github.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url.strip())
     if not m:
         return None, None
     return m.group(1), m.group(2)
 
-def _ensure_allowed(url: str):
-    if not ALLOWLIST_REPOS:
-        return True, None
-    owner, repo = _owner_repo_from_url(url)
-    if not owner:
-        return False, "Repo URL must be like https://github.com/owner/repo"
-    key = f"{owner}/{repo}"
-    return (key in ALLOWLIST_REPOS), f"Repo {key} not in ALLOWLIST_REPOS: {ALLOWLIST_REPOS}"
-
-def _repo_is_empty(repo):
-    # A freshly created GitHub repo with no commits has no HEAD/refs
+def _discover_repo_url(user_input: str):
+    # 1) explicit
+    if user_input and user_input.startswith("http"):
+        return user_input.strip(), "input"
+    # 2) AO_DEFAULT_REPO
+    if AO_DEFAULT_REPO.startswith("http"):
+        return AO_DEFAULT_REPO, "env:AO_DEFAULT_REPO"
+    # 3) allowlist singleton
+    if len(ALLOWLIST_REPOS) == 1:
+        return f"https://github.com/{ALLOWLIST_REPOS[0]}", "env:ALLOWLIST_REPOS"
+    # 4) last used cache
     try:
-        if repo.head.is_valid():
-            return False
+        with open(LAST_CACHE, "r") as f:
+            cached = json.load(f).get("repo_url", "")
+            if cached.startswith("http"):
+                return cached, "cache"
     except Exception:
         pass
-    # also check refs/heads
-    try:
-        return len(list(repo.refs)) == 0
-    except Exception:
-        return True
+    return "", "missing"
 
-def save_progress(repo_url, branch, plan_text, log_text, dry_run=True, author_name="", author_email=""):
-    ok, err = _ensure_allowed(repo_url)
-    if not ok:
-        return json.dumps({"error": err}, indent=2)
-    if not GITHUB_TOKEN:
-        return json.dumps({"error": "GITHUB_TOKEN not set; cannot push. Add it in Space secrets."}, indent=2)
+def _cache_repo_url(url: str):
     try:
-        os.makedirs(RW_WORKDIR, exist_ok=True)
-    except Exception as e:
-        return json.dumps({"error": f"Failed to create workdir {RW_WORKDIR}: {e}"}, indent=2)
+        with open(LAST_CACHE, "w") as f:
+            json.dump({"repo_url": url, "ts": time.time()}, f)
+    except Exception:
+        pass
+
+def _auto_plan(repo_url: str):
+    owner, repo = _owner_repo_from_url(repo_url)
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    return f"""# Agentic Orchestrator Plan
+
+**Version**: AO v0.3.1 (Docker Opinionated)
+**Repo**: {owner}/{repo}
+**When**: {now}
+
+## Goals
+- Establish durable lineage (`ops/plan.md`, `ops/logbook.md`).
+- Enable safe, incremental automation (AO/AOW).
+- Guardrails for tokens, rate limits, and spawn control.
+
+## Phases
+1. Bootstrap repo with ops bundle.
+2. Read-only Git + Ask (quota permitting).
+3. Controlled write ops (ops/* only).
+4. Later: worker spawning & Space orchestration.
+
+## Acceptance
+- ops files exist and are kept current.
+- commits are scoped; no runaway changes.
+- clear rollback via Git tags.
+
+## Guardrails
+- ALLOWLIST_REPOS; AO_DEFAULT_REPO; AO_AUTO_COMMIT heuristic.
+- Writes limited to ops/.
+"""
+
+def _auto_log_entry():
+    return f"Initialized/updated by AO @ {time.strftime('%Y-%m-%d %H:%M:%S')}"
+
+def _safe_to_commit(diff_text: str, staged_paths):
+    if not AO_AUTO_COMMIT:
+        return False, "AO_AUTO_COMMIT=false"
+    if any((p.startswith("../") or ".." in p) for p in staged_paths):
+        return False, "suspicious paths"
+    if not all(p.startswith("ops/") for p in staged_paths):
+        return False, "changes outside ops/"
+    if len(diff_text.encode("utf-8")) > 100_000:
+        return False, "diff too large"
+    return True, "ok"
+
+# ---------- Save Progress (opinionated) ----------
+RW_WORKDIR = "/tmp/repo_rw"
+
+def save_progress_auto(repo_url_input):
+    repo_url, source = _discover_repo_url(repo_url_input or "")
+    if not repo_url:
+        return json.dumps({"error": "No repo URL available. Provide one or set AO_DEFAULT_REPO / ALLOWLIST_REPOS."}, indent=2)
+
+    owner, repo = _owner_repo_from_url(repo_url)
+    if not owner:
+        return json.dumps({"error": "Repo URL must be https://github.com/owner/repo"}, indent=2)
+
+    # allowlist check (if set)
+    if ALLOWLIST_REPOS and f"{owner}/{repo}" not in ALLOWLIST_REPOS:
+        return json.dumps({"error": f"{owner}/{repo} not in ALLOWLIST_REPOS {ALLOWLIST_REPOS}"}, indent=2)
+
+    if not GITHUB_TOKEN:
+        return json.dumps({"error": "GITHUB_TOKEN not set; cannot push."}, indent=2)
 
     from git import Repo, Actor, GitCommandError
 
+    os.makedirs(RW_WORKDIR, exist_ok=True)
     local = os.path.join(RW_WORKDIR, "repo")
     if os.path.exists(local):
         shutil.rmtree(local, ignore_errors=True)
 
-    if not repo_url.startswith("https://github.com/"):
-        return json.dumps({"error": "Only https://github.com URLs are supported."}, indent=2)
-
     src_auth = repo_url.replace("https://", f"https://{GITHUB_TOKEN}@")
-
     try:
-        repo = Repo.clone_from(src_auth, local, depth=1)
+        repo_obj = Repo.clone_from(src_auth, local, depth=1)
     except Exception as e:
         return json.dumps({"error": f"Clone failed: {e}"}, indent=2)
 
-    initialized = False
+    def repo_is_empty(r):
+        try:
+            if r.head.is_valid():
+                return False
+        except Exception:
+            pass
+        try:
+            return len(list(r.refs)) == 0
+        except Exception:
+            return True
+
+    plan_text = _auto_plan(repo_url)
+    log_text = _auto_log_entry()
+
     try:
-        if _repo_is_empty(repo):
-            # bootstrap: create orphan main branch and first commit
-            repo.git.checkout("--orphan", "main")
+        if repo_is_empty(repo_obj):
+            repo_obj.git.checkout("--orphan", "main")
             ops_dir = os.path.join(local, "ops")
             os.makedirs(ops_dir, exist_ok=True)
             with open(os.path.join(ops_dir, "plan.md"), "w", encoding="utf-8") as f:
-                f.write(plan_text or "# Plan\n\n- initial goals / phases / acceptance\n")
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+                f.write(plan_text)
             with open(os.path.join(ops_dir, "logbook.md"), "a", encoding="utf-8") as f:
-                f.write(f"## {ts}\nInitialized AO logbook.\n")
-            repo.git.add(all=True)
-            if dry_run:
-                diff_text = repo.git.diff("--cached")
-                # reset index to leave repo pristine
-                repo.git.reset()
-                return json.dumps({
-                    "repo": repo_url, "branch": "main (new)",
-                    "workdir": RW_WORKDIR, "dry_run": True,
-                    "bootstrap": True,
-                    "changed_files": ["ops/plan.md", "ops/logbook.md"],
-                    "diff_preview": diff_text
-                }, indent=2)
-            author = Actor(author_name or "AO Bot", author_email or "ao@example.com")
-            repo.index.commit(f"chore(ops): bootstrap AO files")
-            # set upstream and push first commit
-            repo.git.push("--set-upstream", "origin", "main")
-            head = repo.head.commit.hexsha
-            initialized = True
+                f.write(f"## {time.strftime('%Y-%m-%d %H:%M:%S')}\nInitialized AO logbook.\n")
+            repo_obj.git.add(all=True)
+            diff_text = repo_obj.git.diff("--cached")
+            staged = ["ops/plan.md", "ops/logbook.md"]
+            ok, why = _safe_to_commit(diff_text, staged)
+            if not ok:
+                repo_obj.git.reset()
+                return json.dumps({"repo": repo_url, "source": source, "bootstrap": True, "dry_run": True, "reason": why, "diff_preview": diff_text}, indent=2)
+            author = Actor("AO Bot", "ao@example.com")
+            repo_obj.index.commit("chore(ops): bootstrap AO files")
+            repo_obj.git.push("--set-upstream", "origin", "main")
+            _cache_repo_url(repo_url)
             return json.dumps({
-                "repo": repo_url, "branch": "main (new)",
-                "workdir": RW_WORKDIR, "dry_run": False,
-                "bootstrap": True,
-                "committed": ["ops/plan.md", "ops/logbook.md"],
-                "head": head
+                "repo": repo_url, "branch": "main (new)", "bootstrap": True, "committed": staged,
+                "links": {
+                    "plan": f"{repo_url}/blob/main/ops/plan.md",
+                    "logbook": f"{repo_url}/blob/main/ops/logbook.md"
+                }
             }, indent=2)
 
-        # Non-empty repo path (existing branch/commits)
-        # determine branch
-        target_branch = branch
+        # existing repo
+        # resolve default branch via origin/HEAD
+        target_branch = None
         try:
-            if not target_branch:
-                for b in ["main", "master"]:
-                    if b in repo.refs:
-                        target_branch = b
-                        break
-            if target_branch:
-                repo.git.checkout(target_branch)
-        except Exception as e:
-            return json.dumps({"error": f"Branch checkout failed: {e}"}, indent=2)
+            sym = repo_obj.git.symbolic_ref("refs/remotes/origin/HEAD")
+            # e.g., refs/remotes/origin/main
+            target_branch = sym.rsplit("/", 1)[-1]
+        except Exception:
+            for b in ["main", "master"]:
+                if b in repo_obj.refs:
+                    target_branch = b
+                    break
+        if target_branch:
+            repo_obj.git.checkout(target_branch)
 
         ops_dir = os.path.join(local, "ops")
         os.makedirs(ops_dir, exist_ok=True)
-        plan_path = os.path.join(ops_dir, "plan.md")
-        with open(plan_path, "w", encoding="utf-8") as f:
-            f.write(plan_text or "# Plan\n\n- (fill me)\n")
-        log_path = os.path.join(ops_dir, "logbook.md")
-        with open(log_path, "a", encoding="utf-8") as f:
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"\n## {ts}\n")
-            f.write((log_text or "Updated by AO.") + "\n")
-        repo.git.add([plan_path, log_path])
-        diff_text = repo.git.diff("--cached")
-        if dry_run:
-            repo.git.reset()
-            return json.dumps({
-                "repo": repo_url, "branch": target_branch or "(auto)",
-                "workdir": RW_WORKDIR, "dry_run": True,
-                "bootstrap": False,
-                "changed_files": ["ops/plan.md", "ops/logbook.md"],
-                "diff_preview": diff_text
-            }, indent=2)
-        author = Actor(author_name or "AO Bot", author_email or "ao@example.com")
-        repo.index.commit(f"chore(ops): update plan/logbook via AO")
-        repo.remotes.origin.push()
-        head = repo.head.commit.hexsha
+        with open(os.path.join(ops_dir, "plan.md"), "w", encoding="utf-8") as f:
+            f.write(plan_text)
+        with open(os.path.join(ops_dir, "logbook.md"), "a", encoding="utf-8") as f:
+            f.write(f"\n## {time.strftime('%Y-%m-%d %H:%M:%S')}\n{log_text}\n")
+        repo_obj.git.add([os.path.join(ops_dir, "plan.md"), os.path.join(ops_dir, "logbook.md")])
+        diff_text = repo_obj.git.diff("--cached")
+        staged = ["ops/plan.md", "ops/logbook.md"]
+        ok, why = _safe_to_commit(diff_text, staged)
+        if not ok:
+            repo_obj.git.reset()
+            return json.dumps({"repo": repo_url, "branch": target_branch or "(auto)", "dry_run": True, "reason": why, "diff_preview": diff_text}, indent=2)
+        author = Actor("AO Bot", "ao@example.com")
+        repo_obj.index.commit("chore(ops): update plan/logbook via AO")
+        repo_obj.remotes.origin.push()
+        _cache_repo_url(repo_url)
         return json.dumps({
-            "repo": repo_url, "branch": target_branch or "(auto)",
-            "workdir": RW_WORKDIR, "dry_run": False,
-            "bootstrap": False,
-            "committed": ["ops/plan.md", "ops/logbook.md"],
-            "head": head
+            "repo": repo_url, "branch": target_branch or "(auto)", "committed": staged,
+            "links": {
+                "plan": f"{repo_url}/blob/{target_branch or 'main'}/ops/plan.md",
+                "logbook": f"{repo_url}/blob/{target_branch or 'main'}/ops/logbook.md"
+            }
         }, indent=2)
     except Exception as e:
-        return json.dumps({"error": f"Save failed: {e}", "initialized": initialized}, indent=2)
+        return json.dumps({"error": f"Save failed: {e}"}, indent=2)
 
-with gr.Blocks(title="Agentic Orchestrator (AO) v0.3.0 — Docker") as demo:
-    gr.Markdown("## AO v0.3.0 — Docker\nGUI + ChatGPT + Read-only Git + **Save Progress to Git (now bootstraps empty repos)**")
+# ---------- UI ----------
+with gr.Blocks(title="Agentic Orchestrator (AO) v0.3.1 — Docker") as demo:
+    gr.Markdown("## AO v0.3.1 — Docker (Opinionated defaults)\nClick **Run** — AO will infer the repo, branch, plan, and commit safely.")
 
     with gr.Tab("Status"):
         btn_stat = gr.Button("Check Status")
@@ -244,31 +225,50 @@ with gr.Blocks(title="Agentic Orchestrator (AO) v0.3.0 — Docker") as demo:
         btn_stat.click(fn=status, outputs=out_stat)
         demo.load(status, outputs=out_stat)
 
-    with gr.Tab("Ask ChatGPT"):
-        q = gr.Textbox(label="Question", placeholder="e.g., What are the next steps for deployment?")
-        ctx = gr.Textbox(label="Optional context", lines=6, placeholder="Paste any relevant snippet here…")
-        btn_ask = gr.Button("Ask")
-        ans = gr.Textbox(label="Answer", lines=10)
-        btn_ask.click(fn=ask_chatgpt, inputs=[q, ctx], outputs=ans)
+    with gr.Tab("Save Progress (Auto)"):
+        repo_in = gr.Textbox(label="Repository URL (optional)", placeholder="Leave blank to auto-discover")
+        run_btn = gr.Button("Run")
+        out = gr.Code(label="Result (JSON)")
+        run_btn.click(fn=save_progress_auto, inputs=repo_in, outputs=out)
 
     with gr.Tab("Git (read-only)"):
         url = gr.Textbox(label="Repository URL", placeholder="https://github.com/owner/repo")
         btn_git = gr.Button("Clone / Refresh (depth=1)")
         out_git = gr.Code(label="Repo Info (JSON)")
+        # Reuse the read-only function from prior versions
+        def git_read(repo_url):
+            from git import Repo
+            work = "/tmp/repo_ro"
+            os.makedirs(work, exist_ok=True)
+            local = os.path.join(work, "repo")
+            info = {"repo_url": repo_url, "workdir": work, "action": "", "error": None}
+            try:
+                if os.path.exists(os.path.join(local, ".git")):
+                    repo = Repo(local)
+                    info["action"] = "fetch"
+                    repo.git.fetch("--depth=1", "origin")
+                    repo.git.checkout("FETCH_HEAD")
+                else:
+                    src = repo_url.strip()
+                    if GITHUB_TOKEN and src.startswith("https://github.com/"):
+                        src = src.replace("https://", f"https://{GITHUB_TOKEN}@")
+                    info["action"] = "clone"
+                    repo = Repo.clone_from(src, local, depth=1)
+                head = repo.head.commit
+                info["head"] = {"sha": head.hexsha, "message": head.message.strip(), "author": str(head.author), "date": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(head.committed_date))}
+                try:
+                    info["branches"] = [h.name for h in repo.remotes.origin.refs][:10]
+                except Exception:
+                    info["branches"] = []
+                commits = []
+                for c in repo.iter_commits(max_count=5):
+                    commits.append({"sha": c.hexsha, "msg": c.message.strip().splitlines()[0], "author": str(c.author), "date": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(c.committed_date))})
+                info["recent_commits"] = commits
+                return json.dumps(info, indent=2)
+            except Exception as e:
+                info["error"] = str(e)
+                return json.dumps(info, indent=2)
         btn_git.click(fn=git_read, inputs=url, outputs=out_git)
-
-    with gr.Tab("Save Progress to Git"):
-        gr.Markdown("Initialize empty repos or update existing ones with an `ops/` bundle. **Dry Run** shows diff without pushing.")
-        s_repo = gr.Textbox(label="Repository URL", placeholder="https://github.com/owner/repo")
-        s_branch = gr.Textbox(label="Branch (optional)", placeholder="main or master (auto / create for empty repo)")
-        s_plan = gr.Textbox(label="ops/plan.md", lines=8, placeholder="# Plan\n\n- goals / phases / acceptance\n")
-        s_log = gr.Textbox(label="ops/logbook.md (entry to append)", lines=6, placeholder="Initial log entry…")
-        s_dry = gr.Checkbox(value=True, label="Dry Run (don't commit/push)", info="Shows diff; no changes pushed.")
-        s_name = gr.Textbox(label="Commit author name (optional)")
-        s_email = gr.Textbox(label="Commit author email (optional)")
-        btn_save = gr.Button("Preview / Save")
-        out_save = gr.Code(label="Result (JSON)")
-        btn_save.click(fn=save_progress, inputs=[s_repo, s_branch, s_plan, s_log, s_dry, s_name, s_email], outputs=out_save)
 
 if __name__ == "__main__":
     demo.queue().launch(server_name="0.0.0.0", server_port=PORT, show_error=True)
