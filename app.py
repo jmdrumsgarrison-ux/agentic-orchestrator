@@ -11,7 +11,7 @@ def status():
         "GITHUB_TOKEN_present": bool(GITHUB_TOKEN),
         "python": sys.version.split()[0],
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "build": "AO v0.1.2 (Docker)"
+        "build": "AO v0.1.3 (Docker)"
     }
 
 def ask_chatgpt(question, context=""):
@@ -44,21 +44,45 @@ def ask_chatgpt(question, context=""):
     except Exception as e:
         return f"[exception] {e}"
 
-WORKDIR = "/home/user/repo_ro"
+# Preferred writable path for HF Docker Spaces
+PRIMARY_WORKDIR = "/tmp/repo_ro"
+FALLBACK_WORKDIR = "/app/repo_ro"
+
+def _ensure_dir(path):
+    try:
+        os.makedirs(path, exist_ok=True)
+        # test write
+        testfile = os.path.join(path, ".write_test")
+        with open(testfile, "w") as f:
+            f.write("ok")
+        os.remove(testfile)
+        return path, None
+    except Exception as e:
+        return None, str(e)
+
+def _pick_workdir():
+    p, errp = _ensure_dir(PRIMARY_WORKDIR)
+    if p:
+        return p
+    f, errf = _ensure_dir(FALLBACK_WORKDIR)
+    if f:
+        return f
+    return None, f"Primary '{PRIMARY_WORKDIR}' error: {errp}; Fallback '{FALLBACK_WORKDIR}' error: {errf}"
 
 def git_read(repo_url):
-    try:
-        os.makedirs(WORKDIR, exist_ok=True)
-    except Exception as e:
-        return json.dumps({"error": f"Failed to create workdir {WORKDIR}: {e}"}, indent=2)
+    w = _pick_workdir()
+    if isinstance(w, tuple):  # when both fail, _pick_workdir returns (None, error_str)
+        _, err = w
+        return json.dumps({"error": f"Failed to prepare working dir. Details: {err}"}, indent=2)
+    workdir = w
 
     try:
         from git import Repo
     except Exception as e:
         return json.dumps({"error": f"GitPython import failed: {e}"}, indent=2)
 
-    local = os.path.join(WORKDIR, "repo")
-    info = {"repo_url": repo_url, "action": "", "error": None}
+    local = os.path.join(workdir, "repo")
+    info = {"repo_url": repo_url, "workdir": workdir, "action": "", "error": None}
     try:
         if not repo_url or not repo_url.startswith("http"):
             raise ValueError("Please enter a full https repo URL, e.g. https://github.com/owner/repo")
@@ -88,8 +112,8 @@ def git_read(repo_url):
         info["error"] = str(e)
         return json.dumps(info, indent=2)
 
-with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.2 — Docker") as demo:
-    gr.Markdown("## AO v0.1.2 — Docker\nGUI + ChatGPT + Read-only Git (writes to /home/user)")
+with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.3 — Docker") as demo:
+    gr.Markdown("## AO v0.1.3 — Docker\nGUI + ChatGPT + Read-only Git (writes to /tmp)")
 
     with gr.Tab("Status"):
         btn_stat = gr.Button("Check Status")
@@ -112,3 +136,4 @@ with gr.Blocks(title="Agentic Orchestrator (AO) v0.1.2 — Docker") as demo:
 
 if __name__ == "__main__":
     demo.queue().launch(server_name="0.0.0.0", server_port=PORT, show_error=True)
+

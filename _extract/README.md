@@ -1,4 +1,4 @@
----
+﻿---
 title: Agentic Orchestrator (AO)
 emoji: 🧠
 colorFrom: green
@@ -9,11 +9,14 @@ app_file: app.py
 pinned: false
 ---
 
-# AO v0.1.2 — Docker
+# AO v0.1.3 — Docker
 
-Fixes:
-- Git working directory is now **/home/user/repo_ro** (writable in HF Docker Spaces).
+Changes:
+- Git working directory set to **/tmp/repo_ro** (writable in HF Docker Spaces).
+- Automatic fallback chain: `/tmp/repo_ro` → `/app/repo_ro`.
+- Clearer error messages.
 
-Notes:
-- Ask ChatGPT still requires an API key with **Pay-As-You-Go** billing enabled on the OpenAI Platform.
-- Optional `GITHUB_TOKEN` for private repos.
+Secrets:
+SecretStrippedByGitPush
+- `GITHUB_TOKEN` (optional for private repos)
+

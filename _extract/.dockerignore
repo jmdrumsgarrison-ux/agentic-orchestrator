@@ -1,4 +1,5 @@
 __pycache__/
 *.pyc
-/home/user/repo_ro/
+/tmp/repo_ro/
+/app/repo_ro/
 .git/
