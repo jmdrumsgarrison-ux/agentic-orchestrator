@@ -9,32 +9,19 @@ app_file: app.py
 pinned: false
 ---
 
-# AO v0.5.1 — Docker (Conversational Context Packs)
+# AO v0.5.2 — Docker (Focused + Context Bootstrap)
 
-New
-- **Context Packs** for the conversational Jobs tab:
-  - AO shows a dynamic **capabilities banner** the moment you open Jobs.
-  - It loads a customizable file from your **AO_DEFAULT_REPO** (`ops/context.yaml`) if present.
-  - If missing, AO falls back to a **built-in default**.
-- **Examples drawer** with copy‑to‑chat snippets based on your enabled secrets.
+Scope (focused)
+- **Only one capability:** Create a **Hugging Face Space** from a **GitHub repo**.
 
-Files added
-- None in the Space repo (all in app). Optional: create `ops/context.yaml` in your AO repo to override the banner.
+What's new
+- Conversational **slot‑filling**: AO asks for missing info (repo URL, name, hardware).
+- **Dry‑run first**, execute only on explicit “yes/proceed”.
+- **Auto‑commit** a starter `ops/context.yaml` into your AO repo (if missing) so the banner is versioned.
 
-Optional `ops/context.yaml` (in AO_DEFAULT_REPO):
-```yaml
-intro: |
-  I can create worker repos, seed from GitHub, and create HF Spaces. I always dry-run first.
-capabilities:
-  - Create GitHub repo (private) under your org
-  - Seed from a public GitHub repo URL
-  - Create a Hugging Face Space from that repo (Docker SDK)
-  - Open PR-based change requests (coming soon)
-guardrails:
-  - Dry run by default, explicit yes to execute
-  - Daily job cap and HF namespace scoping
-examples:
-  - "clone https://github.com/gaomingqi/Track-Anything into a new HF Space called aow-track-anything on cpu"
-  - "create a worker repo called aow-reranker"
-  - "modify the app to expose more controls"  # (will scaffold CR)
-```
+Env / Secrets
+- `GITHUB_TOKEN` — GitHub write access (required)
+- `HF_TOKEN` — Hugging Face write for Spaces (required for creation)
+- `AO_DEFAULT_REPO` — your AO server-of-record repo (required)
+- `HF_NAMESPACE` — your HF org/user for new Spaces (recommended)
+- `JOBS_MAX_PER_DAY` — cap on conversational jobs (default 3)
